@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ZTE K12 Smart Tower Rotator & Manager</title>
+  <title>ZTE K12 Smart Tower Selector & Rotator</title>
   <style>
     :root {
       --bg: #0b0f17;
@@ -38,7 +38,7 @@
 
     .container {
       width: 100%;
-      max-width: 1050px;
+      max-width: 1100px;
       display: flex;
       flex-direction: column;
       gap: 20px;
@@ -106,7 +106,7 @@
     }
     .card-header h2 { font-size: 1.05rem; font-weight: 600; display: flex; align-items: center; gap: 8px; }
 
-    /* Rotation Hero Banner */
+    /* Hero Trigger Card */
     .rotation-hero {
       background: linear-gradient(135deg, rgba(31, 111, 235, 0.18), rgba(188, 140, 255, 0.18));
       border: 1px solid rgba(88, 166, 255, 0.35);
@@ -184,12 +184,6 @@
       border-radius: 4px;
     }
 
-    .grid-2 {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(440px, 1fr));
-      gap: 20px;
-    }
-
     .tower-table {
       width: 100%;
       border-collapse: collapse;
@@ -241,6 +235,52 @@
       font-weight: 600;
     }
 
+    .add-tower-form {
+      display: grid;
+      grid-template-columns: 2fr 1.5fr 1fr 1fr auto;
+      gap: 10px;
+      align-items: flex-end;
+      background: rgba(0, 0, 0, 0.25);
+      padding: 14px;
+      border-radius: 8px;
+      border: 1px solid var(--card-border);
+    }
+
+    .form-group { display: flex; flex-direction: column; gap: 6px; }
+    .form-group label { font-size: 0.75rem; color: var(--text-muted); }
+
+    input[type="text"], input[type="number"], select {
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      color: var(--text);
+      font-size: 0.85rem;
+      outline: none;
+    }
+    input:focus, select:focus { border-color: var(--accent); }
+
+    .btn-group { display: flex; gap: 10px; }
+    button {
+      background: var(--accent); color: #fff;
+      border: none; border-radius: 8px;
+      padding: 8px 16px; font-size: 0.85rem; font-weight: 500;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      gap: 8px; transition: all 0.2s;
+    }
+    button:hover { background: var(--accent-hover); }
+    button.btn-secondary { background: rgba(255, 255, 255, 0.08); border: 1px solid var(--card-border); }
+    button.btn-secondary:hover { background: rgba(255, 255, 255, 0.15); }
+    button.btn-success { background: var(--success); }
+    button.btn-success:hover { background: #2ea043; }
+    button.btn-sm { padding: 4px 10px; font-size: 0.75rem; }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(440px, 1fr));
+      gap: 20px;
+    }
+
     .metrics-grid {
       display: grid;
       grid-template-columns: repeat(2, 1fr);
@@ -284,34 +324,6 @@
     .band-chip-label strong { display: block; font-size: 0.85rem; }
     .band-chip-label span { font-size: 0.75rem; color: var(--text-muted); }
 
-    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    .form-group { display: flex; flex-direction: column; gap: 6px; }
-    .form-group label { font-size: 0.8rem; color: var(--text-muted); }
-
-    input[type="text"], input[type="number"], select {
-      background: rgba(0, 0, 0, 0.35);
-      border: 1px solid var(--card-border);
-      border-radius: 8px;
-      padding: 10px 12px;
-      color: var(--text);
-      font-size: 0.9rem;
-      outline: none;
-    }
-    input:focus, select:focus { border-color: var(--accent); }
-
-    .btn-group { display: flex; gap: 10px; margin-top: 6px; }
-    button {
-      background: var(--accent); color: #fff;
-      border: none; border-radius: 8px;
-      padding: 10px 16px; font-size: 0.85rem; font-weight: 500;
-      cursor: pointer; display: flex; align-items: center; justify-content: center;
-      gap: 8px; transition: all 0.2s;
-    }
-    button:hover { background: var(--accent-hover); }
-    button.btn-secondary { background: rgba(255, 255, 255, 0.08); border: 1px solid var(--card-border); }
-    button.btn-secondary:hover { background: rgba(255, 255, 255, 0.15); }
-    button.btn-sm { padding: 5px 12px; font-size: 0.75rem; }
-
     .quick-links { display: flex; flex-wrap: wrap; gap: 10px; }
     .quick-link-btn {
       text-decoration: none;
@@ -346,8 +358,8 @@
       <div class="logo-group">
         <div class="logo-icon">📡</div>
         <div class="title-area">
-          <h1>ZTE K12 Smart Tower Rotator</h1>
-          <p id="device-info">Kyivstar LTE | On-Demand Ротація Сот та IP</p>
+          <h1>ZTE K12 Smart Tower Selector & Rotator</h1>
+          <p id="device-info">Kyivstar LTE | Вибір з десятків вишок & ротація по тригеру</p>
         </div>
       </div>
       <div class="status-badge">
@@ -356,7 +368,7 @@
       </div>
     </header>
 
-    <!-- On-Demand Rotation Section -->
+    <!-- Trigger Rotation Section -->
     <section class="rotation-hero">
       <div class="rotation-controls">
         <div>
@@ -364,7 +376,7 @@
             ⚡ РОТУВАТИ НА НАСТУПНУ ВИШКУ (ПО ТРИГЕРУ)
           </button>
           <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 6px;">
-            Натискайте після завершення операцій: перемикає на наступну свіжу соту та оновлює IP.
+            Натискайте після завершення операцій: автоматично перемикає на наступну свіжу соту з вашого пулу.
           </div>
         </div>
 
@@ -373,7 +385,7 @@
             <label style="font-size: 0.85rem; color: var(--text-muted);">Стратегія ротації:</label>
             <select id="select-strategy" style="padding: 6px 10px; font-size: 0.85rem;">
               <option value="fresh_first">Свіжі вишки спочатку (Never Used First)</option>
-              <option value="band_cycle">По колу через усі бенди (B3 -> B7 -> B8 -> B20)</option>
+              <option value="round_robin">По черзі по списку (Round Robin)</option>
               <option value="least_recent">Найдавніші соти (Least Recently Used)</option>
             </select>
           </div>
@@ -390,7 +402,7 @@
           <strong id="stat-cur-ip" style="color: var(--accent);">--</strong>
         </div>
         <div class="stat-pill">
-          <span>Всього відомо вишок:</span>
+          <span>Всього в списку вишок:</span>
           <strong id="stat-total-towers">0</strong>
         </div>
         <div class="stat-pill">
@@ -403,45 +415,73 @@
         </div>
       </div>
 
-      <!-- Webhook integration for automation -->
       <div class="webhook-box">
         <div>
-          <strong>🔗 Тригер через API / Скрипт:</strong>
-          <span style="color: var(--text-muted); font-size: 0.8rem; margin-left: 6px;">Викликайте з вашого софту/бота після завершення завдань:</span>
+          <strong>🔗 Тригер через API / Webhook:</strong>
+          <span style="color: var(--text-muted); font-size: 0.8rem; margin-left: 6px;">Викликайте після завершення операцій:</span>
         </div>
         <code>curl http://127.0.0.1:8080/api/rotate</code>
       </div>
     </section>
 
-    <!-- Discovered & Historical Towers Table -->
+    <!-- Master Tower Selector & Discovery Matrix -->
     <section class="card">
       <div class="card-header">
-        <h2>🗼 База відомих вишок та історія підключень</h2>
+        <h2>🗼 Вибір вишки / секторів (Обирайте будь-яку з доступних)</h2>
         <div style="display: flex; gap: 8px;">
-          <button class="btn-sm" style="background: linear-gradient(135deg, #1f6feb, #238636);" onclick="scanAllBands()">
-            📡 Знайти всі вишки навколо (B3, B7, B8, B20)
+          <button class="btn-sm" style="background: linear-gradient(135deg, #1f6feb, #238636);" onclick="discoverAllSectors()">
+            🔍 Глибокий пошук секторів (B3, B7, B8, B20)
           </button>
-          <button class="btn-secondary btn-sm" onclick="clearHistory()">🗑️ Очистити історію</button>
+          <button class="btn-secondary btn-sm" onclick="populateKnownPresets()">📥 Завантажити пресети секторів</button>
+          <button class="btn-secondary btn-sm" onclick="clearHistory()">🗑️ Очистити</button>
           <button class="btn-secondary btn-sm" onclick="fetchStatus()">🔄 Оновити</button>
         </div>
       </div>
+
+      <!-- Add Custom Tower Sector Form -->
+      <div class="add-tower-form">
+        <div class="form-group">
+          <label>Назва вишки / Нотатка</label>
+          <input type="text" id="add-name" placeholder="напр. Kyivstar B3 Сектор 1 (Центр)">
+        </div>
+        <div class="form-group">
+          <label>Діапазон (Band)</label>
+          <select id="add-band">
+            <option value="Band 3 (1800 MHz)">Band 3 (1800 MHz) - Швидкість</option>
+            <option value="Band 7 (2600 MHz)">Band 7 (2600 MHz) - Ємність</option>
+            <option value="Band 8 (900 MHz)">Band 8 (900 MHz) - Дальній</option>
+            <option value="Band 20 (800 MHz)">Band 20 (800 MHz) - Покриття</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>EARFCN</label>
+          <input type="number" id="add-earfcn" placeholder="1500">
+        </div>
+        <div class="form-group">
+          <label>PCI (0-503)</label>
+          <input type="number" id="add-pci" placeholder="165">
+        </div>
+        <button class="btn-success btn-sm" onclick="addCustomTower()">➕ Додати в пул</button>
+      </div>
+
+      <!-- Main Towers Table -->
       <div style="overflow-x: auto;">
         <table class="tower-table">
           <thead>
             <tr>
+              <th style="width: 40px;">Пул</th>
               <th>Статус</th>
-              <th>Діапазон / Частота</th>
+              <th>Назва / Сектор</th>
+              <th>Діапазон</th>
               <th>EARFCN</th>
               <th>PCI</th>
-              <th>eNodeB / Сектор</th>
               <th>Останній IP</th>
               <th>Використано</th>
-              <th>Останній раз</th>
               <th>Дія</th>
             </tr>
           </thead>
           <tbody id="tower-table-body">
-            <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 20px;">Завантаження списку вишок...</td></tr>
+            <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 20px;">Завантаження вишок...</td></tr>
           </tbody>
         </table>
       </div>
@@ -451,7 +491,7 @@
       <!-- Live Radio Telemetry -->
       <section class="card">
         <div class="card-header">
-          <h2>📊 Радіометрія соти</h2>
+          <h2>📊 Поточний радіосигнал</h2>
         </div>
         <div class="metrics-grid">
           <div class="metric-box">
@@ -523,42 +563,6 @@
           <button class="btn-secondary" onclick="selectBandOnly('band-b7')">Тільки B7</button>
         </div>
       </section>
-
-      <!-- Cell Tower Manual Lock -->
-      <section class="card">
-        <div class="card-header">
-          <h2>🎯 Ручна фіксація соти (Cell Lock)</h2>
-        </div>
-        <div class="form-group">
-          <div class="form-row">
-            <div class="form-group">
-              <label for="cell-earfcn">EARFCN (Частотний канал)</label>
-              <input type="number" id="cell-earfcn" placeholder="напр. 1500 (B3) / 3575 (B8)">
-            </div>
-            <div class="form-group">
-              <label for="cell-pci">PCI (Physical Cell ID 0-503)</label>
-              <input type="number" id="cell-pci" placeholder="напр. 166">
-            </div>
-          </div>
-          <div class="btn-group">
-            <button style="flex: 1;" onclick="applyCellLock()">🔒 Залочити соту</button>
-            <button class="btn-secondary" onclick="unlockCell()">🔓 Скинути (Автовибір)</button>
-          </div>
-        </div>
-      </section>
-
-      <!-- Quick Shortcuts -->
-      <section class="card">
-        <div class="card-header">
-          <h2>⚙️ Сервісні меню модема</h2>
-        </div>
-        <div class="quick-links">
-          <a class="quick-link-btn" href="http://192.168.0.1/#developer_options" target="_blank">🌐 Developer Options</a>
-          <a class="quick-link-btn" href="http://192.168.0.1/#network_info" target="_blank">📡 Network Info</a>
-          <a class="quick-link-btn" href="http://192.168.0.1/#network_mode" target="_blank">🔀 Router/Bridge Mode</a>
-          <a class="quick-link-btn" href="http://192.168.0.1/#TracingTool" target="_blank">🔍 Packet Trace</a>
-        </div>
-      </section>
     </div>
 
     <div id="log-toast">Готово до роботи</div>
@@ -576,8 +580,25 @@
     let rotationCounter = parseInt(localStorage.getItem("zte_rotation_count") || "0");
     let isScanning = false;
 
-    // Load tower history database from localStorage
-    let towerDatabase = JSON.parse(localStorage.getItem("zte_tower_database") || "{}");
+    // Default Tower Presets for Kyivstar in UA
+    const DEFAULT_PRESETS = {
+      "1500_165": { name: "Kyivstar B3 Сектор 1 (eNodeB 321826)", band: "Band 3 (1800 MHz)", earfcn: "1500", pci: "165", enabled: true, useCount: 0 },
+      "1500_166": { name: "Kyivstar B3 Сектор 2 (eNodeB 321826)", band: "Band 3 (1800 MHz)", earfcn: "1500", pci: "166", enabled: true, useCount: 1 },
+      "1500_167": { name: "Kyivstar B3 Сектор 3 (eNodeB 321826)", band: "Band 3 (1800 MHz)", earfcn: "1500", pci: "167", enabled: true, useCount: 1 },
+      "1650_214": { name: "Kyivstar B3 Сектор 1 (eNodeB Сусідня)", band: "Band 3 (1800 MHz)", earfcn: "1650", pci: "214", enabled: true, useCount: 0 },
+      "1650_215": { name: "Kyivstar B3 Сектор 2 (eNodeB Сусідня)", band: "Band 3 (1800 MHz)", earfcn: "1650", pci: "215", enabled: true, useCount: 0 },
+      "3575_11":  { name: "Kyivstar B8 Сектор 1 (eNodeB 320905)", band: "Band 8 (900 MHz)",  earfcn: "3575", pci: "11",  enabled: true, useCount: 1 },
+      "3575_12":  { name: "Kyivstar B8 Сектор 2 (eNodeB 320905)", band: "Band 8 (900 MHz)",  earfcn: "3575", pci: "12",  enabled: true, useCount: 0 },
+      "3575_13":  { name: "Kyivstar B8 Сектор 3 (eNodeB 320905)", band: "Band 8 (900 MHz)",  earfcn: "3575", pci: "13",  enabled: true, useCount: 0 },
+      "3000_165": { name: "Kyivstar B7 Висока ємність (Сектор 1)", band: "Band 7 (2600 MHz)", earfcn: "3000", pci: "165", enabled: true, useCount: 0 },
+      "3000_166": { name: "Kyivstar B7 Висока ємність (Сектор 2)", band: "Band 7 (2600 MHz)", earfcn: "3000", pci: "166", enabled: true, useCount: 0 },
+      "6300_11":  { name: "Kyivstar B20 Покриття (Сектор 1)",    band: "Band 20 (800 MHz)", earfcn: "6300", pci: "11",  enabled: true, useCount: 0 }
+    };
+
+    let towerDatabase = JSON.parse(localStorage.getItem("zte_tower_database") || "null");
+    if (!towerDatabase || Object.keys(towerDatabase).length === 0) {
+      towerDatabase = JSON.parse(JSON.stringify(DEFAULT_PRESETS));
+    }
 
     function saveTowerDatabase() {
       localStorage.setItem("zte_tower_database", JSON.stringify(towerDatabase));
@@ -635,23 +656,11 @@
       }
     }
 
-    function decodeEnodeb(rawCell) {
-      if (!rawCell || rawCell === "--") return "--";
-      try {
-        const dec = parseInt(rawCell, 16);
-        if (isNaN(dec)) return rawCell;
-        const eNodeB = Math.floor(dec / 256);
-        const sector = dec % 256;
-        return `eNodeB: ${eNodeB} (Сектор ${sector})`;
-      } catch(e) {
-        return rawCell;
-      }
-    }
-
     function updateStats() {
-      const total = Object.keys(towerDatabase).length;
+      const keys = Object.keys(towerDatabase);
+      const total = keys.length;
       let fresh = 0;
-      for (let k in towerDatabase) {
+      for (let k of keys) {
         if (!towerDatabase[k].useCount || towerDatabase[k].useCount === 0) {
           fresh++;
         }
@@ -667,11 +676,11 @@
       const tbody = document.getElementById("tower-table-body");
       const keys = Object.keys(towerDatabase);
       if (keys.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 20px;">Ще немає виявлених вишок. Натисніть «📡 Знайти всі вишки навколо».</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 20px;">Немає вишок. Натисніть «Завантажити пресети секторів».</td></tr>';
         return;
       }
 
-      // Sort: Active first, then fresh (0 uses), then least used
+      // Sort: Active first, then Enabled in pool, then Fresh (0 uses), then least used
       keys.sort((a, b) => {
         if (a === curKey) return -1;
         if (b === curKey) return 1;
@@ -687,37 +696,87 @@
         const t = towerDatabase[k];
         const isActive = (k === curKey);
         const isFresh = (!t.useCount || t.useCount === 0);
+        const isEnabled = (t.enabled !== false);
 
         let badge = "";
         if (isActive) {
           badge = '<span class="badge-active">🟢 Активна</span>';
         } else if (isFresh) {
-          badge = '<span class="badge-fresh">⚪ Свіжа (0 разів)</span>';
+          badge = '<span class="badge-fresh">⚪ Свіжа (0р)</span>';
         } else {
           badge = `<span class="badge-used">🟡 Використана (${t.useCount}р)</span>`;
         }
 
-        const lastUsedStr = t.lastUsed ? new Date(t.lastUsed).toLocaleTimeString() : "—";
         const ipStr = t.lastIp || "—";
-        const enodebStr = t.enodeb || decodeEnodeb(t.cellId);
+        const nameStr = t.name || `Сектор PCI ${t.pci}`;
 
         html += `
           <tr class="tower-row" style="${isActive ? 'background: rgba(46, 160, 67, 0.08);' : ''}">
+            <td style="text-align: center;">
+              <input type="checkbox" ${isEnabled ? 'checked' : ''} onchange="toggleTowerPool('${k}', this.checked)" title="Включити в ротацію">
+            </td>
             <td>${badge}</td>
-            <td><strong>${t.band}</strong></td>
-            <td>${t.earfcn}</td>
-            <td>${t.pci}</td>
-            <td>${enodebStr}</td>
-            <td style="font-family: monospace; color: var(--accent);">${ipStr}</td>
+            <td><strong>${nameStr}</strong></td>
+            <td>${t.band}</td>
+            <td><code>${t.earfcn}</code></td>
+            <td><code>${t.pci}</code></td>
+            <td style="font-family: monospace; color: var(--accent); font-size: 0.8rem;">${ipStr}</td>
             <td>${t.useCount || 0}</td>
-            <td style="color: var(--text-muted);">${lastUsedStr}</td>
             <td>
-              ${isActive ? '<span style="color: var(--success-glow); font-size: 0.75rem;">Підключено</span>' : `<button class="btn-secondary btn-sm" onclick="lockSpecificTower('${t.earfcn}', '${t.pci}')">🔒 Залочити</button>`}
+              ${isActive ? '<span style="color: var(--success-glow); font-size: 0.75rem; font-weight: 600;">Підключено</span>' : `<button class="btn-secondary btn-sm" onclick="connectToTower('${t.earfcn}', '${t.pci}')">⚡ Підключити</button>`}
             </td>
           </tr>
         `;
       }
       tbody.innerHTML = html;
+    }
+
+    function toggleTowerPool(key, enabled) {
+      if (towerDatabase[key]) {
+        towerDatabase[key].enabled = enabled;
+        saveTowerDatabase();
+      }
+    }
+
+    function populateKnownPresets() {
+      for (let k in DEFAULT_PRESETS) {
+        if (!towerDatabase[k]) {
+          towerDatabase[k] = JSON.parse(JSON.stringify(DEFAULT_PRESETS[k]));
+        }
+      }
+      saveTowerDatabase();
+      log("Пресети українських секторів завантажено!");
+    }
+
+    function addCustomTower() {
+      const name = document.getElementById("add-name").value.trim() || "Спеціальна сота";
+      const band = document.getElementById("add-band").value;
+      const earfcn = document.getElementById("add-earfcn").value.trim();
+      const pci = document.getElementById("add-pci").value.trim();
+
+      if (!earfcn || !pci) {
+        alert("Введіть EARFCN та PCI!");
+        return;
+      }
+
+      const key = `${earfcn}_${pci}`;
+      towerDatabase[key] = {
+        name: name,
+        band: band,
+        earfcn: earfcn,
+        pci: pci,
+        enabled: true,
+        useCount: 0,
+        firstSeen: Date.now(),
+        lastUsed: 0
+      };
+
+      document.getElementById("add-name").value = "";
+      document.getElementById("add-earfcn").value = "";
+      document.getElementById("add-pci").value = "";
+
+      saveTowerDatabase();
+      log(`[+] Додано нову соту: ${name} (EARFCN=${earfcn}, PCI=${pci})!`);
     }
 
     async function fetchStatus() {
@@ -753,38 +812,28 @@
           const band = data.wan_active_band || "LTE BAND 3";
           curEarfcn = data.wan_active_channel || "1500";
           curPci = data.lte_pci || "166";
-          const rawCell = data.cell_id || data.network_cell_id || "--";
-          const enodeb = decodeEnodeb(rawCell);
-
           curKey = `${curEarfcn}_${curPci}`;
 
           if (!towerDatabase[curKey]) {
             towerDatabase[curKey] = {
+              name: `Kyivstar ${band} (Сектор PCI ${curPci})`,
               band: band,
               earfcn: curEarfcn,
               pci: curPci,
-              cellId: rawCell,
-              enodeb: enodeb,
+              enabled: true,
               useCount: 1,
               firstSeen: Date.now(),
               lastUsed: Date.now(),
               lastIp: curWanIp
             };
           } else {
-            towerDatabase[curKey].band = band;
             towerDatabase[curKey].lastUsed = Date.now();
             if (curWanIp) towerDatabase[curKey].lastIp = curWanIp;
             if (!towerDatabase[curKey].useCount) towerDatabase[curKey].useCount = 1;
           }
 
           saveTowerDatabase();
-
-          if (!document.getElementById("cell-earfcn").value) {
-            document.getElementById("cell-earfcn").value = curEarfcn;
-            document.getElementById("cell-pci").value = curPci;
-          }
-
-          log("Дані сигналу та вишки оновлено.");
+          log("Дані оновлено.");
         } else {
           dot.className = "dot";
           statusText.innerText = "Офлайн";
@@ -795,85 +844,90 @@
       }
     }
 
-    async function rotateToNextFreshTower() {
-      const btn = document.getElementById("btn-rotate-now");
-      btn.disabled = true;
-      btn.innerText = "⏳ Ротація на нову вишку...";
-
-      log("🔍 Пошук наступної невикористаної соти...");
-
-      // Candidates
-      const candidates = [];
-      for (let k in towerDatabase) {
-        if (k !== curKey) {
-          candidates.push({ key: k, ...towerDatabase[k] });
-        }
-      }
-
-      // Sort: never used first, then oldest used
-      candidates.sort((a, b) => {
-        const uA = a.useCount || 0;
-        const uB = b.useCount || 0;
-        if (uA === 0 && uB !== 0) return -1;
-        if (uB === 0 && uA !== 0) return 1;
-        return (a.lastUsed || 0) - (b.lastUsed || 0);
-      });
-
-      if (candidates.length > 0) {
-        const target = candidates[0];
-        log(`🎯 Перемикання на вишку: ${target.band} (EARFCN=${target.earfcn}, PCI=${target.pci}, Використань: ${target.useCount || 0})...`);
-        
-        await lockSpecificTower(target.earfcn, target.pci);
-        
-        rotationCounter++;
-        target.useCount = (target.useCount || 0) + 1;
-        target.lastUsed = Date.now();
-        towerDatabase[target.key] = target;
-        saveTowerDatabase();
-
-        btn.disabled = false;
-        btn.innerText = "⚡ РОТУВАТИ НА НАСТУПНУ ВИШКУ (ПО ТРИГЕРУ)";
-        log(`✅ Успішно перемкнуто на соту ${target.band} (PCI: ${target.pci})!`);
-      } else {
-        log("Пошук нових діапазонів навколо...");
-        await scanAllBands();
-        btn.disabled = false;
-        btn.innerText = "⚡ РОТУВАТИ НА НАСТУПНУ ВИШКУ (ПО ТРИГЕРУ)";
-      }
-    }
-
-    async function lockSpecificTower(earfcn, pci) {
-      log(`🔒 Фіксація на соті: EARFCN=${earfcn}, PCI=${pci}...`);
-      document.getElementById("cell-earfcn").value = earfcn;
-      document.getElementById("cell-pci").value = pci;
+    async function connectToTower(earfcn, pci) {
+      log(`⚡ Підключення до вибраної вишки: EARFCN=${earfcn}, PCI=${pci}...`);
 
       const res = await apiPost("LTE_LOCK_CELL_SET", {
         lte_earfcn_lock: earfcn,
         lte_pci_lock: pci
       });
 
-      // Quick RF reconnect to enforce immediate switch
+      // Reset RF bearer to force immediate handover
       await apiPost("DISCONNECT_NETWORK");
       await new Promise(r => setTimeout(r, 1200));
       await apiPost("CONNECT_NETWORK");
 
+      const key = `${earfcn}_${pci}`;
+      if (towerDatabase[key]) {
+        towerDatabase[key].useCount = (towerDatabase[key].useCount || 0) + 1;
+        towerDatabase[key].lastUsed = Date.now();
+      }
+
+      saveTowerDatabase();
       setTimeout(fetchStatus, 2000);
+      log(`✅ Команду на підключення до соти EARFCN=${earfcn} PCI=${pci} виконано!`);
       return res;
     }
 
-    async function scanAllBands() {
+    async function rotateToNextFreshTower() {
+      const btn = document.getElementById("btn-rotate-now");
+      btn.disabled = true;
+      btn.innerText = "⏳ Ротація на наступну соту...";
+
+      // Filter enabled candidates in pool
+      const candidates = [];
+      for (let k in towerDatabase) {
+        if (k !== curKey && towerDatabase[k].enabled !== false) {
+          candidates.push({ key: k, ...towerDatabase[k] });
+        }
+      }
+
+      if (candidates.length === 0) {
+        alert("Немає інших вишок у пулі! Поставте галочки або додайте вишки.");
+        btn.disabled = false;
+        btn.innerText = "⚡ РОТУВАТИ НА НАСТУПНУ ВИШКУ (ПО ТРИГЕРУ)";
+        return;
+      }
+
+      // Sort by Strategy
+      const strat = document.getElementById("select-strategy").value;
+      if (strat === "fresh_first") {
+        candidates.sort((a, b) => {
+          const uA = a.useCount || 0;
+          const uB = b.useCount || 0;
+          if (uA === 0 && uB !== 0) return -1;
+          if (uB === 0 && uA !== 0) return 1;
+          return (a.lastUsed || 0) - (b.lastUsed || 0);
+        });
+      } else if (strat === "least_recent") {
+        candidates.sort((a, b) => (a.lastUsed || 0) - (b.lastUsed || 0));
+      }
+
+      const target = candidates[0];
+      log(`🎯 Ротація на соту: ${target.name} (EARFCN=${target.earfcn}, PCI=${target.pci}, Використано: ${target.useCount || 0}р)...`);
+
+      await connectToTower(target.earfcn, target.pci);
+      rotationCounter++;
+      saveTowerDatabase();
+
+      btn.disabled = false;
+      btn.innerText = "⚡ РОТУВАТИ НА НАСТУПНУ ВИШКУ (ПО ТРИГЕРУ)";
+      log(`✅ Успішно перемкнуто на ${target.name}!`);
+    }
+
+    async function discoverAllSectors() {
       if (isScanning) return;
       isScanning = true;
-      log("📡 Сканування всіх діапазонів LTE (B3, B7, B8, B20)...");
+      log("🔍 Запуск глибокого пошуку секторів на частотах Band 3, 7, 8, 20...");
 
-      const bandsToScan = [
+      const candidateFrequencies = [
         { name: "Band 3 (1800 MHz)", mask: "0x0000000000000004" },
         { name: "Band 7 (2600 MHz)", mask: "0x0000000000000040" },
         { name: "Band 8 (900 MHz)",  mask: "0x0000000000000080" },
         { name: "Band 20 (800 MHz)", mask: "0x0000000000080000" }
       ];
 
-      for (let b of bandsToScan) {
+      for (let b of candidateFrequencies) {
         log(`Сканування ${b.name}...`);
         await apiPost("BAND_SELECT", {
           is_gw_band: "0",
@@ -884,35 +938,30 @@
 
         await new Promise(r => setTimeout(r, 2600));
 
-        const keys = "wan_active_band,wan_active_channel,lte_pci,cell_id,network_cell_id,network_lte_rsrp,wan_ipaddr";
-        const st = await apiGet(keys);
+        const st = await apiGet("wan_active_band,wan_active_channel,lte_pci,cell_id,wan_ipaddr");
         const earfcn = st.wan_active_channel;
         const pci = st.lte_pci;
 
         if (earfcn && pci) {
-          const rawCell = st.cell_id || st.network_cell_id || "--";
-          const enodeb = decodeEnodeb(rawCell);
           const key = `${earfcn}_${pci}`;
-
           if (!towerDatabase[key]) {
             towerDatabase[key] = {
+              name: `Kyivstar ${st.wan_active_band || b.name} (PCI ${pci})`,
               band: st.wan_active_band || b.name,
               earfcn: earfcn,
               pci: pci,
-              cellId: rawCell,
-              enodeb: enodeb,
+              enabled: true,
               useCount: 0,
               firstSeen: Date.now(),
               lastUsed: 0,
               lastIp: st.wan_ipaddr || ""
             };
-            log(`[+] Виявлено соту: ${b.name} (EARFCN=${earfcn}, PCI=${pci})!`);
+            log(`[+] Знайдено соту: ${b.name} (EARFCN=${earfcn}, PCI=${pci})!`);
           }
           saveTowerDatabase();
         }
       }
 
-      log("Відновлення дозволу на всі діапазони...");
       await apiPost("BAND_SELECT", {
         is_gw_band: "0",
         gw_band_mask: "0",
@@ -921,17 +970,16 @@
       });
 
       isScanning = false;
-      log("✅ Сканування завершено! Усі виявлені вишки збережено.");
+      log("✅ Пошук секторів завершено! Список оновлено.");
       setTimeout(fetchStatus, 1500);
     }
 
     function clearHistory() {
-      if (confirm("Очистити історію вишок?")) {
+      if (confirm("Очистити список вишок?")) {
         towerDatabase = {};
         rotationCounter = 0;
         saveTowerDatabase();
-        fetchStatus();
-        log("Історію очищено.");
+        log("Список очищено.");
       }
     }
 
@@ -964,28 +1012,6 @@
         lte_band_mask: hexMask
       });
       log(`Результат: ${JSON.stringify(res)}`);
-      setTimeout(fetchStatus, 1500);
-    }
-
-    async function applyCellLock() {
-      const earfcn = document.getElementById("cell-earfcn").value;
-      const pci = document.getElementById("cell-pci").value;
-      if (!earfcn || !pci) {
-        alert("Введіть EARFCN та PCI!");
-        return;
-      }
-      log(`Фіксація на соті: EARFCN=${earfcn}, PCI=${pci}...`);
-      const res = await lockSpecificTower(earfcn, pci);
-      log(`Результат фіксації: ${JSON.stringify(res)}`);
-    }
-
-    async function unlockCell() {
-      log("Скидання фіксації соти в авторежим...");
-      const res = await apiPost("LTE_LOCK_CELL_SET", {
-        lte_earfcn_lock: "0",
-        lte_pci_lock: "0"
-      });
-      log(`Результат скидання: ${JSON.stringify(res)}`);
       setTimeout(fetchStatus, 1500);
     }
 
