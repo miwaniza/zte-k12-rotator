@@ -164,10 +164,10 @@ impl ZTEClient {
 
         let url = format!("{}/goform/goform_set_cmd_process", self.base_url);
         let mut params = HashMap::new();
-        params.insert("isTest", "false");
-        params.insert("goformId", "LOGIN");
-        params.insert("password", &password_hash);
-        params.insert("save_login", "1");
+        params.insert("isTest".to_string(), "false".to_string());
+        params.insert("goformId".to_string(), "LOGIN".to_string());
+        params.insert("password".to_string(), password_hash);
+        params.insert("save_login".to_string(), "1".to_string());
 
         let resp = self
             .client
@@ -204,17 +204,16 @@ impl ZTEClient {
         Ok(())
     }
 
-    pub fn post_cmd(&self, goform_id: &str, mut params: HashMap<&str, &str>, with_ad: bool) -> Result<HashMap<String, serde_json::Value>, String> {
+    pub fn post_cmd(&self, goform_id: &str, mut params: HashMap<String, String>, with_ad: bool) -> Result<HashMap<String, serde_json::Value>, String> {
         self.ensure_logged_in()?;
 
-        let mut ad_token = String::new();
         if with_ad {
-            ad_token = self.get_ad_token()?;
-            params.insert("AD", &ad_token);
+            let ad_token = self.get_ad_token()?;
+            params.insert("AD".to_string(), ad_token);
         }
 
-        params.insert("isTest", "false");
-        params.insert("goformId", goform_id);
+        params.insert("isTest".to_string(), "false".to_string());
+        params.insert("goformId".to_string(), goform_id.to_string());
 
         let url = format!("{}/goform/goform_set_cmd_process", self.base_url);
         let resp = self
@@ -252,22 +251,19 @@ impl ZTEClient {
 
         let hex_mask = format!("0x{:016x}", mask);
         let mut params = HashMap::new();
-        params.insert("is_gw_band", "0");
-        params.insert("gw_band_mask", "0");
-        params.insert("is_lte_band", "1");
-        params.insert("lte_band_mask", &hex_mask);
+        params.insert("is_gw_band".to_string(), "0".to_string());
+        params.insert("gw_band_mask".to_string(), "0".to_string());
+        params.insert("is_lte_band".to_string(), "1".to_string());
+        params.insert("lte_band_mask".to_string(), hex_mask);
 
         let res = self.post_cmd("BAND_SELECT", params, true)?;
         Ok(serde_json::to_string(&res).unwrap_or_default())
     }
 
     pub fn lock_cell(&self, earfcn: u32, pci: u32) -> Result<String, String> {
-        let earfcn_s = earfcn.to_string();
-        let pci_s = pci.to_string();
-
         let mut params = HashMap::new();
-        params.insert("lte_earfcn_lock", &earfcn_s);
-        params.insert("lte_pci_lock", &pci_s);
+        params.insert("lte_earfcn_lock".to_string(), earfcn.to_string());
+        params.insert("lte_pci_lock".to_string(), pci.to_string());
 
         let res = self.post_cmd("LTE_LOCK_CELL_SET", params, true)?;
         Ok(serde_json::to_string(&res).unwrap_or_default())
@@ -275,8 +271,8 @@ impl ZTEClient {
 
     pub fn unlock_cell(&self) -> Result<String, String> {
         let mut params = HashMap::new();
-        params.insert("lte_earfcn_lock", "0");
-        params.insert("lte_pci_lock", "0");
+        params.insert("lte_earfcn_lock".to_string(), "0".to_string());
+        params.insert("lte_pci_lock".to_string(), "0".to_string());
         let res = self.post_cmd("LTE_LOCK_CELL_SET", params, true)?;
         Ok(serde_json::to_string(&res).unwrap_or_default())
     }
@@ -284,11 +280,11 @@ impl ZTEClient {
     pub fn reconnect_rf(&self) -> Result<(), String> {
         let _ = self.unlock_cell();
         let mut p1 = HashMap::new();
-        p1.insert("notCallback", "true");
+        p1.insert("notCallback".to_string(), "true".to_string());
         let _ = self.post_cmd("DISCONNECT_NETWORK", p1, true);
         thread::sleep(Duration::from_millis(1500));
         let mut p2 = HashMap::new();
-        p2.insert("notCallback", "true");
+        p2.insert("notCallback".to_string(), "true".to_string());
         let _ = self.post_cmd("CONNECT_NETWORK", p2, true);
         Ok(())
     }
