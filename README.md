@@ -1,58 +1,62 @@
-# ZTE K12 (ZX297520V3 / ZX297520V3E) Research & Customization Suite
+# ZTE K12 (ZX297520V3 / ZX297520V3E) Cell Tower & Band Control Suite
 
-A comprehensive toolkit, exploitation suite, and architectural guide for researching, unlocking, and customizing **ZTE K12** (and related ZTE / Sanechips ZX297520V3 / ZX297520V3E cellular routers).
-
----
-
-## 🚀 Key Capabilities
-
-* **Cell Locking (`AT+ZLTELC`)**: Lock to specific LTE Downlink EARFCN and Physical Cell ID (PCI) via GoAhead `goform` IPC without modifying baseband binaries.
-* **Band Locking & Bearer Preference**: Enforce LTE-only modes and custom band profiles.
-* **Fast Carrier / RF Reset**: Force bearer drop and re-attach for rapid cell switching.
-* **Privilege Escalation & Root Shell**: Exploits unauthenticated directory traversal and post-auth `system()` command injection (`REMOVE_WHITE_SITE`, `TZ_CMD_SECURE_LOGIN`) to spawn root `telnetd` or activate ADB.
-* **Firmware Extraction & Unpacking**: Live MTD dump guides and standalone SPI NAND OOB stripping / partition extraction tool.
-* **USB BootROM RAM Bootloader**: Documentation for using `zx297520v3-loader` to boot custom U-Boot into RAM via USB download protocol (`19d2:0256`) with secure boot bypass.
+An intuitive control toolkit, interactive dashboard, and reverse-engineering research suite for **ZTE K12** (SmartDigital UA, firmware `BD_SMARTDIGITALUAK12V1.0.0B01`).
 
 ---
 
-## 📂 Repository Structure
+## ⚡ Quick Start: Easy Cell & Band Control
 
-* [docs/zte_k12_platform_architecture.md](docs/zte_k12_platform_architecture.md) — Detailed hardware, boot MCU, Cortex-A53 AP, partition layout, and modem IPC architecture.
-* [docs/goform_api_reference.md](docs/goform_api_reference.md) — Complete reverse-engineered GoForm endpoint catalog for cellular metrics, cell lock, band control, and exploits.
-* [docs/firmware_dump_and_mod_strategy.md](docs/firmware_dump_and_mod_strategy.md) — Three-tier methodology for firmware extraction (Live shell, USB BootROM, Hardware SPI NAND) and rootfs modding.
-* [tools/zte_client.py](tools/zte_client.py) — Interactive Python CLI client for device probing, live RF signal reading, cell locking, bearer resetting, and exploit execution.
-* [tools/dump_parser.py](tools/dump_parser.py) — Zero-dependency SPI NAND dump parser with OOB stripping and partition splitting.
+Launch the interactive terminal dashboard:
+```bash
+python3 tools/cell_control.py menu
+```
+
+This presents a live terminal UI to:
+* View live radio signal metrics (**RSRP, RSSI, SINR, RSRQ**).
+* **Lock Frequency Bands**: Band 3 (1800 MHz), Band 7 (2600 MHz), Band 8 (900 MHz), Band 20 (800 MHz).
+* **Lock Cell Towers**: Input target `EARFCN` and `PCI` to lock onto a specific cell tower sector.
+* **Direct WebUI Shortcuts**: One-click opening of `#developer_options` and `#network_mode` in your browser.
 
 ---
 
-## 🛠️ Usage Examples
+## 🛠️ CLI Quick Commands
 
-### 1. Device Discovery & Live Signal Metrics
+### 1. Lock to Specific Frequency Bands
 ```bash
-python3 tools/zte_client.py --host 192.168.0.1 probe
+# Lock to Band 3 (1800 MHz - best urban speed)
+python3 tools/cell_control.py lock-band B3
+
+# Lock to multiple bands (e.g. B3 + B7)
+python3 tools/cell_control.py lock-band B3 B7
+
+# Reset to all Ukrainian LTE bands (B3 + B7 + B8 + B20)
+python3 tools/cell_control.py lock-band ALL
 ```
 
-### 2. LTE Cell Lock (EARFCN + PCI)
+### 2. Lock to a Specific Cell Tower (Cell Lock)
 ```bash
-# Lock to EARFCN 1650 (Band 3), PCI 214 and automatically reconnect RF
-python3 tools/zte_client.py --host 192.168.0.1 lock-cell --earfcn 1650 --pci 214 --reconnect
+# Lock to EARFCN 1650 (Band 3) and PCI 214 with automatic RF reconnect
+python3 tools/cell_control.py lock-cell --earfcn 1650 --pci 214 --reconnect
 
-# Return to automatic cell selection
-python3 tools/zte_client.py --host 192.168.0.1 unlock-cell --reconnect
+# Clear cell lock (return to automatic cell selection)
+python3 tools/cell_control.py unlock-cell
 ```
 
-### 3. Spawn Root Telnet Shell (Exploit)
+### 3. Check Live Status & Telemetry
 ```bash
-python3 tools/zte_client.py --host 192.168.0.1 enable-telnet
-telnet 192.168.0.1
+python3 tools/cell_control.py status
 ```
 
-### 4. Extract Plaintext Admin Password (Pre-Auth)
+### 4. Open Developer Options in Web Browser
 ```bash
-python3 tools/zte_client.py --host 192.168.0.1 get-password
+python3 tools/cell_control.py webui
 ```
+*(Opens `http://192.168.0.1/#developer_options` directly in your default browser)*
 
-### 5. Parse Raw SPI NAND Dump
-```bash
-python3 tools/dump_parser.py raw_flash_dump.bin -o extracts/
-```
+---
+
+## 📂 Documentation & Architecture References
+
+* [docs/zte_k12_platform_architecture.md](docs/zte_k12_platform_architecture.md) — SoC architecture (Cortex-A53 + M0 bootloader + Baseband DSP), memory maps, SPI NAND layout.
+* [docs/goform_api_reference.md](docs/goform_api_reference.md) — Reverse-engineered GoForm endpoint catalogue for cellular control and diagnostic queries.
+* [docs/firmware_dump_and_mod_strategy.md](docs/firmware_dump_and_mod_strategy.md) — Firmware extraction, unpacking, and modification guide.
