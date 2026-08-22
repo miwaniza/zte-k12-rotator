@@ -1,5 +1,5 @@
 # ==============================================================================
-#  ZTE K12 1-Click IP Rotator & System Toast Notification (Pure PowerShell)
+#  ZTE K12 1-Click IP & Region Rotator & System Toast Notification
 # ==============================================================================
 $ErrorActionPreference = "SilentlyContinue"
 
@@ -11,7 +11,7 @@ if (-not (Test-Path "$InstallDir\zte-control.exe")) {
 # 1. Trigger rotation via local service API or binary
 $Rotated = $false
 try {
-    $resp = Invoke-RestMethod -Uri "http://127.0.0.1:8080/api/reconnect" -TimeoutSec 6
+    $resp = Invoke-RestMethod -Uri "http://127.0.0.1:8080/api/reconnect" -TimeoutSec 10
     if ($resp.status -eq "success") { $Rotated = $true }
 } catch {
     Start-Process "$InstallDir\zte-control.exe" -ArgumentList "reconnect" -Wait -WindowStyle Hidden
@@ -20,23 +20,31 @@ try {
 
 Start-Sleep -Seconds 3
 
-# 2. Query status & new public IP
+# 2. Query status & new public IP + Region
 $NewIp = "--"
+$Region = "Київська обл."
 $City = "Київ"
 $Country = "UA"
 $Isp = "Kyivstar"
-$Band = "Band 3"
+$Band = "LTE"
 $Pci = "--"
 $Rsrp = "--"
 
 try {
-    $geo = Invoke-RestMethod -Uri "https://ipwho.is/" -TimeoutSec 4
-    if ($geo.ip) {
-        $NewIp = $geo.ip
-        if ($geo.city) { $City = $geo.city }
-        if ($geo.country_code) { $Country = $geo.country_code }
-        if ($geo.connection.isp) { $Isp = $geo.connection.isp }
+    $geo = Invoke-RestMethod -Uri "http://127.0.0.1:8080/api/geo" -TimeoutSec 4
+    if (-not $geo.query -and -not $geo.ip) {
+        $geo = Invoke-RestMethod -Uri "http://ip-api.com/json/?fields=status,country,regionName,city,isp,as,query" -TimeoutSec 4
     }
+
+    if ($geo.query) { $NewIp = $geo.query }
+    elseif ($geo.ip) { $NewIp = $geo.ip }
+
+    if ($geo.regionName) { $Region = $geo.regionName }
+    elseif ($geo.region) { $Region = $geo.region }
+
+    if ($geo.city) { $City = $geo.city }
+    if ($geo.isp) { $Isp = $geo.isp }
+    elseif ($geo.connection.isp) { $Isp = $geo.connection.isp }
 } catch {}
 
 try {
@@ -56,9 +64,9 @@ try {
 <toast duration="short">
     <visual>
         <binding template="ToastGeneric">
-            <text>📡 ZTE K12: IP успішно змінено! ✅</text>
-            <text>🌐 Новий IP: $NewIp ($City, $Isp)</text>
-            <text>🗼 Вишка: $Band (PCI $Pci) | RSRP: $Rsrp dBm</text>
+            <text>📡 ZTE K12: IP & Регіон змінено! ✅</text>
+            <text>🌐 Новий IP: $NewIp</text>
+            <text>📍 Регіон: $Region, $City ($Isp) | $Band</text>
         </binding>
     </visual>
 </toast>
@@ -76,7 +84,7 @@ if (-not $toastShown) {
         $notify = New-Object System.Windows.Forms.NotifyIcon
         $notify.Icon = [System.Drawing.SystemIcons]::Information
         $notify.BalloonTipTitle = "📡 ZTE K12: Новий IP отримано! ✅"
-        $notify.BalloonTipText = "IP: $NewIp ($City, $Isp) | $Band (PCI $Pci)"
+        $notify.BalloonTipText = "IP: $NewIp ($Region, $City) | $Band (PCI $Pci)"
         $notify.Visible = $true
         $notify.ShowBalloonTip(4000)
         Start-Sleep -Seconds 4

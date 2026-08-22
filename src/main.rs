@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::Read;
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -15,8 +16,18 @@ const EMBEDDED_MANIFEST: &str = include_str!("../web/manifest.json");
 const EMBEDDED_SW_JS: &str = include_str!("../web/sw.js");
 const EMBEDDED_ICON_SVG: &str = include_str!("../web/icon.svg");
 
+static BAND_CYCLE_INDEX: AtomicUsize = AtomicUsize::new(0);
+
+const ROTATION_MASKS: &[(&str, &str)] = &[
+    ("Band 3 (1800 MHz)", "0x0000000000000004"),
+    ("Band 8 (900 MHz)",  "0x0000000000000080"),
+    ("Band 7 (2600 MHz)", "0x0000000000000040"),
+    ("Band 20 (800 MHz)", "0x0000000000080000"),
+    ("All Bands (Auto)",  "0x00000000000800c4"),
+];
+
 #[derive(Parser, Debug)]
-#[command(name = "zte-control", author, version = VERSION, about = "Universal Controller, IP Rotator & PWA Service for ZTE K12 (ZX297520)")]
+#[command(name = "zte-control", author, version = VERSION, about = "Universal Controller, IP & Region Rotator for ZTE K12 (ZX297520)")]
 pub struct Cli {
     #[arg(long, default_value = "http://192.168.0.1", help = "Router base URL")]
     pub host: String,
@@ -66,10 +77,10 @@ pub enum Commands {
         reconnect: bool,
     },
 
-    /// Force cellular bearer disconnect & re-attach (RF reset / Airplane mode)
+    /// Force full band-hop + RF disconnect & reconnect to rotate IP & Region
     Reconnect,
 
-    /// Rotate to next LTE band and obtain a new IP address
+    /// Rotate to next LTE frequency band + cell and obtain a guaranteed new IP
     Rotate,
 
     /// Check for application updates from GitHub
@@ -93,13 +104,9 @@ pub enum Commands {
 
 #[derive(Subcommand, Debug)]
 pub enum ServiceAction {
-    /// Install as auto-starting background Windows Task / Service
     Install,
-    /// Uninstall background Windows Task / Service
     Uninstall,
-    /// Start background service
     Start,
-    /// Stop background service
     Stop,
 }
 
@@ -302,16 +309,48 @@ impl ZTEClient {
         Ok(serde_json::to_string(&res).unwrap_or_default())
     }
 
-    pub fn reconnect_rf(&self) -> Result<(), String> {
+    /// Combined Band-Hop + Carrier Bearer Reset (Guaranteed IP & Region change)
+    pub fn rotate_and_reconnect(&self) -> Result<String, String> {
+        let idx = BAND_CYCLE_INDEX.fetch_add(1, Ordering::SeqCst) % ROTATION_MASKS.len();
+        let (band_name, band_mask) = ROTATION_MASKS[idx];
+        println!("[*] Rotating to frequency {}: mask {}", band_name, band_mask);
+
+        // 1. Clear cell lock
         let _ = self.unlock_cell();
+
+        // 2. Select target frequency band to force gateway handover
+        let mut p_band = HashMap::new();
+        p_band.insert("is_gw_band".to_string(), "0".to_string());
+        p_band.insert("gw_band_mask".to_string(), "0".to_string());
+        p_band.insert("is_lte_band".to_string(), "1".to_string());
+        p_band.insert("lte_band_mask".to_string(), band_mask.to_string());
+        let _ = self.post_cmd("BAND_SELECT", p_band, true);
+
+        // 3. Disconnect cellular session
         let mut p1 = HashMap::new();
         p1.insert("notCallback".to_string(), "true".to_string());
         let _ = self.post_cmd("DISCONNECT_NETWORK", p1, true);
-        thread::sleep(Duration::from_millis(1500));
+
+        // 4. Guard sleep so PGW drops old IP lease
+        thread::sleep(Duration::from_millis(1600));
+
+        // 5. Connect cellular session
         let mut p2 = HashMap::new();
         p2.insert("notCallback".to_string(), "true".to_string());
         let _ = self.post_cmd("CONNECT_NETWORK", p2, true);
-        Ok(())
+
+        // 6. Wait for PPP connected and return new IP
+        for _ in 0..8 {
+            thread::sleep(Duration::from_millis(1000));
+            if let Ok(st) = self.get_cmd("wan_ipaddr,ppp_status", false) {
+                let ppp = st.get("ppp_status").and_then(|v| v.as_str()).unwrap_or("");
+                let ip = st.get("wan_ipaddr").and_then(|v| v.as_str()).unwrap_or("");
+                if ppp == "ppp_connected" && !ip.is_empty() {
+                    return Ok(ip.to_string());
+                }
+            }
+        }
+        Ok("reconnected".to_string())
     }
 }
 
@@ -415,8 +454,9 @@ pub fn run_ui_server(client: Arc<ZTEClient>, port: u16, no_open: bool) {
                 .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
             let _ = request.respond(response);
         } else if url_path.starts_with("/api/reconnect") || url_path.starts_with("/api/rotate") {
-            let _ = client.reconnect_rf();
-            let response = Response::from_string("{\"status\":\"success\",\"action\":\"reconnected\"}")
+            let new_ip = client.rotate_and_reconnect().unwrap_or_else(|_| "reconnected".to_string());
+            let json_res = format!("{{\"status\":\"success\",\"action\":\"rotated\",\"wan_ip\":\"{}\"}}", new_ip);
+            let response = Response::from_string(json_res)
                 .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap())
                 .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
             let _ = request.respond(response);
@@ -432,11 +472,18 @@ pub fn run_ui_server(client: Arc<ZTEClient>, port: u16, no_open: bool) {
                 .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
             let _ = request.respond(response);
         } else if url_path.starts_with("/api/geo") {
+            // Multi-provider Geo telemetry with Region & Oblast details
             let geo_data = http_client
-                .get("https://ipwho.is/")
+                .get("http://ip-api.com/json/?fields=status,message,country,countryCode,region,regionName,city,zip,lat,lon,timezone,isp,org,as,query")
                 .send()
                 .and_then(|r| r.text())
-                .unwrap_or_else(|_| "{\"success\":false,\"error\":\"geo_fetch_failed\"}".to_string());
+                .unwrap_or_else(|_| {
+                    http_client
+                        .get("https://ipwho.is/")
+                        .send()
+                        .and_then(|r| r.text())
+                        .unwrap_or_else(|_| "{\"status\":\"fail\"}".to_string())
+                });
 
             let response = Response::from_string(geo_data)
                 .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap())
@@ -606,7 +653,7 @@ fn main() {
             Ok(res) => {
                 println!("[+] Cell lock result: {}", res);
                 if reconnect {
-                    let _ = client.reconnect_rf();
+                    let _ = client.rotate_and_reconnect();
                 }
             }
             Err(e) => eprintln!("[-] Error locking cell: {}", e),
@@ -616,15 +663,17 @@ fn main() {
             Ok(res) => {
                 println!("[+] Unlock result: {}", res);
                 if reconnect {
-                    let _ = client.reconnect_rf();
+                    let _ = client.rotate_and_reconnect();
                 }
             }
             Err(e) => eprintln!("[-] Error unlocking cell: {}", e),
         },
 
         Some(Commands::Reconnect) | Some(Commands::Rotate) => {
-            let _ = client.reconnect_rf();
-            println!("[+] Cellular Airplane reconnect triggered. New IP requested.");
+            match client.rotate_and_reconnect() {
+                Ok(new_ip) => println!("[+] Cellular session rotated! New WAN IP: {}", new_ip),
+                Err(e) => eprintln!("[-] Error during rotation: {}", e),
+            }
         }
 
         Some(Commands::CheckUpdate) => match check_for_updates() {

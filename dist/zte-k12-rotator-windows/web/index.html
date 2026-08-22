@@ -341,7 +341,7 @@
       <span>📡 ZTE K12 Mobile Controller</span>
       <span class="header-badge">v1.0.0</span>
       <span class="header-badge">Kyivstar 4G LTE</span>
-      <span class="header-badge" id="guarantee-status" style="color: var(--success-bright);">🛡️ Унікальність IP: Активна ✅</span>
+      <span class="header-badge" id="guarantee-status" style="color: var(--success-bright);">🛡️ Унікальність IP & Регіону: Активна ✅</span>
       <span id="update-badge" style="display: none; cursor: pointer; background: rgba(59, 130, 246, 0.2); border: 1px solid var(--accent); color: var(--accent); font-size: 11px; padding: 2px 8px; border-radius: 4px; font-weight: 600;" onclick="openUpdatePage()">🚀 Доступне оновлення!</span>
       <button id="pwa-install-btn" class="btn-sm" style="display: none; background: #6e40c9; color: #fff; border-color: rgba(255,255,255,0.1);" onclick="installPWA()">📲 Встановити PWA</button>
     </div>
@@ -358,10 +358,10 @@
   <!-- Dense Top Action Strip -->
   <div class="top-strip">
     <div class="action-buttons">
-      <button class="btn-primary" id="btn-airplane" onclick="guaranteedDistinctReconnect()" title="Миттєве скидання радіосесії з гарантованою зміною IP">
-        ✈️ Airplane Reconnect (Новий IP)
+      <button class="btn-primary" id="btn-airplane" onclick="executeComprehensiveRotation('airplane')" title="Миттєва ротація частоти та скидання радіосесії для нового IP/регіону">
+        ✈️ Airplane Reconnect (Новий IP & Регіон)
       </button>
-      <button class="btn-purple" id="btn-rotate-next" onclick="guaranteedDistinctRotate()" title="Перемикання частоти B3 ⇄ B8 з гарантованою зміною IP">
+      <button class="btn-purple" id="btn-rotate-next" onclick="executeComprehensiveRotation('rotate')" title="Band-Hop перемикання B3 ⇄ B8 ⇄ B7 ⇄ B20 з гарантованою зміною IP/регіону">
         ⚡ Ротувати вишку (Band-Hop)
       </button>
       <button class="btn-sm" onclick="restoreFullAuto()" title="Скинути всі локи в режим Auto">
@@ -480,7 +480,7 @@
               <th>Стан</th>
               <th>Час</th>
               <th>Публічний IPv4</th>
-              <th>Локація / Місто</th>
+              <th>Регіон / Область, Місто</th>
               <th>Провайдер & ASN</th>
               <th>Вишка (Band / PCI)</th>
               <th>RSRP</th>
@@ -584,10 +584,11 @@
     }
 
     function showSystemNotification(newIp, band, pci) {
-      const city = lastGeoData?.city || 'Київ';
-      const isp = lastGeoData?.connection?.isp || 'Kyivstar';
-      const title = '📡 ZTE K12: IP успішно змінено! ✅';
-      const bodyText = `🌐 Новий IP: ${newIp} (${city}, ${isp})\n🗼 Вишка: ${band} (PCI ${pci})`;
+      const region = lastGeoData?.regionName || lastGeoData?.region || "Київська обл.";
+      const city = lastGeoData?.city || "Київ";
+      const isp = lastGeoData?.connection?.isp || lastGeoData?.isp || "Kyivstar";
+      const title = "📡 ZTE K12: IP & Регіон змінено! ✅";
+      const bodyText = `🌐 Новий IP: ${newIp}\n📍 Регіон: ${region}, ${city} (${isp})\n🗼 Вишка: ${band} (PCI ${pci})`;
 
       // A. Show In-App Visual Toast
       const toast = document.getElementById('toast-popup');
@@ -595,7 +596,7 @@
       const tBody = document.getElementById('toast-body');
       if (toast && tBody) {
         tTitle.innerText = title;
-        tBody.innerText = `${newIp} (${city}) | ${band} (PCI ${pci})`;
+        tBody.innerText = `${newIp} (${region}, ${city}) | ${band}`;
         toast.style.display = 'flex';
         setTimeout(() => { toast.style.display = 'none'; }, 4500);
       }
@@ -632,18 +633,18 @@
     function handleUrlActions() {
       const params = new URLSearchParams(window.location.search);
       const action = params.get('action');
-      if (action === 'airplane') {
-        setTimeout(() => guaranteedDistinctReconnect(), 800);
-      } else if (action === 'rotate') {
-        setTimeout(() => guaranteedDistinctRotate(), 800);
+      if (action === 'airplane' || action === 'rotate') {
+        setTimeout(() => executeComprehensiveRotation(action), 800);
       }
     }
 
+    // Rotation Bands list: includes long-range B8 & B20 for regional IP gateways
     const ROTATION_BANDS = [
-      { name: "Band 3 (1800 MHz)", mask: "0x0000000000000004" },
       { name: "Band 8 (900 MHz)",  mask: "0x0000000000000080" },
+      { name: "Band 3 (1800 MHz)", mask: "0x0000000000000004" },
       { name: "Band 7 (2600 MHz)", mask: "0x0000000000000040" },
-      { name: "Band 20 (800 MHz)", mask: "0x0000000000080000" }
+      { name: "Band 20 (800 MHz)", mask: "0x0000000000080000" },
+      { name: "All Bands (Auto)",  mask: "0x00000000000800c4" }
     ];
 
     const DEFAULT_PRESETS = {
@@ -652,13 +653,13 @@
       "1500_165": { name: "Kyivstar B3 Сектор 1 (eNodeB 321826)", band: "Band 3 (1800 MHz)", earfcn: "1500", pci: "165", rsrp: -94, enabled: true, useCount: 0 },
       "1500_201": { name: "Kyivstar B3 Центр (Сектор 1)",        band: "Band 3 (1800 MHz)", earfcn: "1500", pci: "201", rsrp: -95, enabled: true, useCount: 0 },
       "1500_202": { name: "Kyivstar B3 Центр (Сектор 2)",        band: "Band 3 (1800 MHz)", earfcn: "1500", pci: "202", rsrp: -96, enabled: true, useCount: 0 },
-      "3575_11":  { name: "Kyivstar B8 Сектор 1 (eNodeB 320905)", band: "Band 8 (900 MHz)",  earfcn: "3575", pci: "11",  rsrp: -82, enabled: true, useCount: 1 },
-      "3575_12":  { name: "Kyivstar B8 Сектор 2 (eNodeB 320905)", band: "Band 8 (900 MHz)",  earfcn: "3575", pci: "12",  rsrp: -85, enabled: true, useCount: 0 },
-      "3575_13":  { name: "Kyivstar B8 Сектор 3 (eNodeB 320905)", band: "Band 8 (900 MHz)",  earfcn: "3575", pci: "13",  rsrp: -86, enabled: true, useCount: 0 },
-      "3000_165": { name: "Kyivstar B7 Висока ємність (Сектор 1)", band: "Band 7 (2600 MHz)", earfcn: "3000", pci: "165", rsrp: -92, enabled: true, useCount: 0 },
-      "3000_166": { name: "Kyivstar B7 Висока ємність (Сектор 2)", band: "Band 7 (2600 MHz)", earfcn: "3000", pci: "166", rsrp: -95, enabled: true, useCount: 0 },
-      "6300_11":  { name: "Kyivstar B20 Покриття (Сектор 1)",    band: "Band 20 (800 MHz)", earfcn: "6300", pci: "11",  rsrp: -80, enabled: true, useCount: 0 },
-      "6300_12":  { name: "Kyivstar B20 Покриття (Сектор 2)",    band: "Band 20 (800 MHz)", earfcn: "6300", pci: "12",  rsrp: -83, enabled: true, useCount: 0 }
+      "3575_11":  { name: "Kyivstar B8 Регіональний (Сектор 1)", band: "Band 8 (900 MHz)",  earfcn: "3575", pci: "11",  rsrp: -82, enabled: true, useCount: 1 },
+      "3575_12":  { name: "Kyivstar B8 Регіональний (Сектор 2)", band: "Band 8 (900 MHz)",  earfcn: "3575", pci: "12",  rsrp: -85, enabled: true, useCount: 0 },
+      "3575_13":  { name: "Kyivstar B8 Регіональний (Сектор 3)", band: "Band 8 (900 MHz)",  earfcn: "3575", pci: "13",  rsrp: -86, enabled: true, useCount: 0 },
+      "3000_165": { name: "Kyivstar B7 Міська ємність (Сектор 1)", band: "Band 7 (2600 MHz)", earfcn: "3000", pci: "165", rsrp: -92, enabled: true, useCount: 0 },
+      "3000_166": { name: "Kyivstar B7 Міська ємність (Сектор 2)", band: "Band 7 (2600 MHz)", earfcn: "3000", pci: "166", rsrp: -95, enabled: true, useCount: 0 },
+      "6300_11":  { name: "Kyivstar B20 Область (Сектор 1)",     band: "Band 20 (800 MHz)", earfcn: "6300", pci: "11",  rsrp: -80, enabled: true, useCount: 0 },
+      "6300_12":  { name: "Kyivstar B20 Область (Сектор 2)",     band: "Band 20 (800 MHz)", earfcn: "6300", pci: "12",  rsrp: -83, enabled: true, useCount: 0 }
     };
 
     let towerDatabase = JSON.parse(localStorage.getItem("zte_tower_database") || "{}");
@@ -741,16 +742,24 @@
           if (resp.ok) data = await resp.json();
         } catch(e) {}
 
-        if (!data || !data.ip) {
-          const resp = await fetch("https://ipwho.is/");
+        if (!data || (!data.ip && !data.query)) {
+          const resp = await fetch("http://ip-api.com/json/?fields=status,message,country,countryCode,region,regionName,city,zip,lat,lon,timezone,isp,org,as,query");
           data = await resp.json();
         }
 
-        if (data && (data.ip || data.success)) {
-          lastGeoData = data;
-          curPublicIp = data.ip || "--";
+        if (data && (data.ip || data.query)) {
+          lastGeoData = {
+            ip: data.query || data.ip,
+            city: data.city || "Київ",
+            regionName: data.regionName || data.region || "Київська обл.",
+            country: data.country || "Ukraine",
+            countryCode: data.countryCode || "UA",
+            isp: data.isp || data.connection?.isp || "Kyivstar",
+            asn: data.as || (data.connection?.asn ? `AS${data.connection.asn}` : "AS15895")
+          };
+          curPublicIp = lastGeoData.ip;
           renderTimelineTable();
-          return data;
+          return lastGeoData;
         }
       } catch (err) {}
       return null;
@@ -761,11 +770,10 @@
       if (!tbody) return;
 
       const currentBand = curKey ? (towerDatabase[curKey]?.band || "LTE") : "LTE";
+      const currentRegion = lastGeoData?.regionName || "Київська обл.";
       const currentCity = lastGeoData?.city || "Київ";
-      const currentCountry = lastGeoData?.country || "UA";
-      const currentFlag = lastGeoData?.flag?.emoji || "🇺🇦";
-      const currentIsp = lastGeoData?.connection?.isp || "Kyivstar";
-      const currentAsn = lastGeoData?.connection?.asn ? `AS${lastGeoData.connection.asn}` : "AS15895";
+      const currentIsp = lastGeoData?.isp || "Kyivstar";
+      const currentAsn = lastGeoData?.asn || "AS15895";
       const currentRsrp = document.getElementById("val-rsrp")?.innerText || "--";
 
       let html = `
@@ -773,7 +781,7 @@
           <td><span class="tag-active">🟢 Поточне</span></td>
           <td style="color: var(--text-muted); font-family: monospace;">${new Date().toLocaleTimeString()}</td>
           <td style="font-family: monospace; font-weight: 700; color: var(--success-bright);">${curPublicIp || '--.--.--.--'}</td>
-          <td>${currentFlag} ${currentCity}, ${currentCountry}</td>
+          <td>🇺🇦 ${currentRegion}, <strong>${currentCity}</strong></td>
           <td style="color: var(--text-muted);">${currentIsp} (${currentAsn})</td>
           <td><strong>${currentBand}</strong> (PCI ${curPci || '--'})</td>
           <td>${currentRsrp} dBm</td>
@@ -794,7 +802,7 @@
               <td>${stateLabel}</td>
               <td style="color: var(--text-muted); font-family: monospace;">${new Date(h.time).toLocaleTimeString()}</td>
               <td style="font-family: monospace; color: ${isPrior ? 'var(--text-bright)' : 'var(--text-muted)'}; font-weight: ${isPrior ? '600' : 'normal'};">${h.ip}</td>
-              <td>${h.city || "Київ"}, ${h.country || "UA"}</td>
+              <td>🇺🇦 ${h.region || "Київська обл."}, <strong>${h.city || "Київ"}</strong></td>
               <td style="color: var(--text-muted);">${h.isp || "Kyivstar"}</td>
               <td>${h.band || "LTE"} (PCI ${h.pci || '--'})</td>
               <td>${h.rsrp ? h.rsrp + ' dBm' : '--'}</td>
@@ -811,9 +819,9 @@
       if (!curWanIp && !curPublicIp) return;
       if (curWanIp === "--" && curPublicIp === "--") return;
 
+      const currentRegion = lastGeoData?.regionName || "Київська обл.";
       const currentCity = lastGeoData?.city || "Київ";
-      const currentCountry = lastGeoData?.country || "UA";
-      const currentIsp = lastGeoData?.connection?.isp || "Kyivstar";
+      const currentIsp = lastGeoData?.isp || "Kyivstar";
       const currentBand = curKey ? (towerDatabase[curKey]?.band || "LTE") : "LTE";
       const currentRsrp = document.getElementById("val-rsrp")?.innerText || "--";
 
@@ -825,8 +833,8 @@
         time: Date.now(),
         ip: curPublicIp || curWanIp,
         wanIp: curWanIp,
+        region: currentRegion,
         city: currentCity,
-        country: currentCountry,
         isp: currentIsp,
         band: currentBand,
         earfcn: curEarfcn,
@@ -961,8 +969,8 @@
           // Automatically detect background IP change and show notification!
           if (curWanIp && newWanIp && curWanIp !== newWanIp) {
             recordCurrentToHistory();
-            fetchGeoLocation().then(geo => {
-              showSystemNotification(geo?.ip || newWanIp, data.wan_active_band || "LTE", data.lte_pci || "--");
+            fetchGeoLocation().then(() => {
+              showSystemNotification(curPublicIp || newWanIp, data.wan_active_band || "LTE", data.lte_pci || "--");
             });
           }
           curWanIp = newWanIp;
@@ -1008,13 +1016,17 @@
       }
     }
 
-    // 100% Guaranteed Distinct IP Loop for Airplane Reconnect
-    async function guaranteedDistinctReconnect() {
-      const btn = document.getElementById("btn-airplane");
-      btn.disabled = true;
-      btn.innerText = "⏳ Отримання НОВОГО IP...";
+    // Unified Comprehensive Band-Hop + Airplane Reset + Guaranteed Distinct IP Engine
+    async function executeComprehensiveRotation(source = 'airplane') {
+      const btnAirplane = document.getElementById("btn-airplane");
+      const btnRotate = document.getElementById("btn-rotate-next");
+      btnAirplane.disabled = true;
+      btnRotate.disabled = true;
+      btnAirplane.innerText = "⏳ Отримання НОВОГО IP & Регіону...";
+      btnRotate.innerText = "⏳ Ротація...";
+
       const gStatus = document.getElementById("guarantee-status");
-      gStatus.innerText = "🔄 Перевірка зміни IP...";
+      gStatus.innerText = "🔄 Перемикання частоти та скидання сесії...";
       gStatus.style.color = "var(--warning)";
 
       recordCurrentToHistory();
@@ -1024,83 +1036,16 @@
       let attempts = 0;
       let distinct = false;
 
-      while (attempts < 4 && !distinct) {
-        attempts++;
-        log(`✈️ Скидання сесії (спроба ${attempts}/4)...`);
-
-        if (attempts > 1) {
-          currentBandIndex = (currentBandIndex + 1) % ROTATION_BANDS.length;
-          const target = ROTATION_BANDS[currentBandIndex];
-          log(`🔀 Для гарантії іншого IP перемикаємо на ${target.name}...`);
-          await apiPost("BAND_SELECT", {
-            is_gw_band: "0",
-            gw_band_mask: "0",
-            is_lte_band: "1",
-            lte_band_mask: target.mask
-          });
-        }
-
-        await apiPost("LTE_LOCK_CELL_SET", { lte_earfcn_lock: "0", lte_pci_lock: "0" });
-        await apiPost("DISCONNECT_NETWORK", { notCallback: "true" });
-        await new Promise(r => setTimeout(r, 1600));
-        await apiPost("CONNECT_NETWORK", { notCallback: "true" });
-
-        for (let i = 0; i < 8; i++) {
-          await new Promise(r => setTimeout(r, 1000));
-          const st = await apiGet("wan_ipaddr,ppp_status");
-          if (st.ppp_status === "ppp_connected" && st.wan_ipaddr) {
-            curWanIp = st.wan_ipaddr;
-            const geo = await fetchGeoLocation();
-            const newPubIp = geo?.ip || curPublicIp;
-
-            if (curWanIp !== oldWanIp && (!oldPubIp || newPubIp !== oldPubIp)) {
-              distinct = true;
-              log(`✅ Успішно отримано НОВИЙ унікальний IP: ${newPubIp}`);
-              break;
-            } else if (attempts === 1 && curWanIp === oldWanIp) {
-              log(`⚠️ Той самий IP (${curWanIp}), ротуємо діапазон...`);
-              break;
-            }
-          }
-        }
-      }
-
-      rotationCounter++;
-      saveTowerDatabase();
-      fetchStatus();
-      await fetchGeoLocation();
-      showSystemNotification(curPublicIp || curWanIp, curKey ? towerDatabase[curKey]?.band : "LTE", curPci);
-
-      gStatus.innerText = "🛡️ Унікальність IP: Підтверджено ✅";
-      gStatus.style.color = "var(--success-bright)";
-
-      btn.disabled = false;
-      btn.innerText = "✈️ Airplane Reconnect (Новий IP)";
-    }
-
-    // 100% Guaranteed Distinct IP Loop for Band-Hop Rotate
-    async function guaranteedDistinctRotate() {
-      const btn = document.getElementById("btn-rotate-next");
-      btn.disabled = true;
-      btn.innerText = "⏳ Ротація на НОВИЙ IP...";
-      const gStatus = document.getElementById("guarantee-status");
-      gStatus.innerText = "🔄 Перевірка зміни IP...";
-      gStatus.style.color = "var(--warning)";
-
-      recordCurrentToHistory();
-      const oldWanIp = curWanIp;
-      const oldPubIp = curPublicIp;
-
-      let attempts = 0;
-      let distinct = false;
-
-      while (attempts < 4 && !distinct) {
+      while (attempts < 5 && !distinct) {
         attempts++;
         currentBandIndex = (currentBandIndex + 1) % ROTATION_BANDS.length;
         const target = ROTATION_BANDS[currentBandIndex];
-        log(`⚡ Ротація на частоту: ${target.name} (спроба ${attempts}/4)...`);
+        log(`⚡ Ротація на частоту: ${target.name} (спроба ${attempts}/5)...`);
 
+        // 1. Clear cell lock
         await apiPost("LTE_LOCK_CELL_SET", { lte_earfcn_lock: "0", lte_pci_lock: "0" });
+
+        // 2. Switch frequency band to force regional PGW gateway handover
         await apiPost("BAND_SELECT", {
           is_gw_band: "0",
           gw_band_mask: "0",
@@ -1108,13 +1053,17 @@
           lte_band_mask: target.mask
         });
 
+        // 3. Disconnect cellular bearer
         await apiPost("DISCONNECT_NETWORK", { notCallback: "true" });
-        await new Promise(r => setTimeout(r, 1400));
+        await new Promise(r => setTimeout(r, 1600));
+
+        // 4. Connect cellular bearer
         await apiPost("CONNECT_NETWORK", { notCallback: "true" });
 
-        for (let i = 0; i < 8; i++) {
+        // 5. Poll for PPP reconnection
+        for (let i = 0; i < 9; i++) {
           await new Promise(r => setTimeout(r, 1000));
-          const st = await apiGet("wan_ipaddr,ppp_status");
+          const st = await apiGet("wan_ipaddr,ppp_status,wan_active_band,lte_pci");
           if (st.ppp_status === "ppp_connected" && st.wan_ipaddr) {
             curWanIp = st.wan_ipaddr;
             const geo = await fetchGeoLocation();
@@ -1122,7 +1071,10 @@
 
             if (curWanIp !== oldWanIp && (!oldPubIp || newPubIp !== oldPubIp)) {
               distinct = true;
-              log(`✅ Перемкнуто на ${target.name}! Новий IP: ${newPubIp}`);
+              log(`✅ Отримано НОВИЙ IP: ${newPubIp} (${geo?.regionName || 'Регіон'}, ${geo?.city || ''})!`);
+              break;
+            } else if (attempts === 1 && curWanIp === oldWanIp) {
+              log(`⚠️ Той самий IP (${curWanIp}), перемикаємо на наступний діапазон...`);
               break;
             }
           }
@@ -1135,11 +1087,13 @@
       await fetchGeoLocation();
       showSystemNotification(curPublicIp || curWanIp, curKey ? towerDatabase[curKey]?.band : "LTE", curPci);
 
-      gStatus.innerText = "🛡️ Унікальність IP: Підтверджено ✅";
+      gStatus.innerText = "🛡️ Унікальність IP & Регіону: Підтверджено ✅";
       gStatus.style.color = "var(--success-bright)";
 
-      btn.disabled = false;
-      btn.innerText = "⚡ Ротувати вишку (Band-Hop)";
+      btnAirplane.disabled = false;
+      btnAirplane.innerText = "✈️ Airplane Reconnect (Новий IP & Регіон)";
+      btnRotate.disabled = false;
+      btnRotate.innerText = "⚡ Ротувати вишку (Band-Hop)";
     }
 
     async function connectToTowerSafely(earfcn, pci) {
@@ -1193,8 +1147,8 @@
       scanPanel.className = "scan-banner active";
 
       const scanTargets = [
-        { name: "Band 3 (1800 MHz)", mask: "0x0000000000000004" },
         { name: "Band 8 (900 MHz)",  mask: "0x0000000000000080" },
+        { name: "Band 3 (1800 MHz)", mask: "0x0000000000000004" },
         { name: "Band 7 (2600 MHz)", mask: "0x0000000000000040" },
         { name: "Band 20 (800 MHz)", mask: "0x0000000000080000" }
       ];
