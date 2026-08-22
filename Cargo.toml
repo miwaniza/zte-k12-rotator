@@ -1,0 +1,23 @@
+[package]
+name = "zte-control"
+version = "0.1.0"
+edition = "2021"
+description = "Universal macOS / Windows / Linux Control Suite for ZTE K12 (ZX297520)"
+authors = ["Dmytro Yemelianov"]
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+reqwest = { version = "0.12", features = ["json", "cookies", "blocking"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+hex = "0.4"
+tiny_http = "0.12"
+open = "5.3"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+codegen-units = 1
+panic = "abort"

@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ZTE K12 Control Panel | Cell & Band Manager</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card-bg: rgba(22, 27, 34, 0.85);
+      --card-border: rgba(255, 255, 255, 0.1);
+      --text: #f0f6fc;
+      --text-muted: #8b949e;
+      --accent: #58a6ff;
+      --accent-hover: #1f6feb;
+      --success: #238636;
+      --success-glow: #2ea043;
+      --warning: #d29922;
+      --danger: #da3633;
+      --radius: 12px;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: var(--font);
+      background-color: var(--bg);
+      background-image: radial-gradient(circle at 50% 0%, rgba(88, 166, 255, 0.15) 0%, transparent 60%);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 24px 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 900px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 20px;
+      background: var(--card-bg);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+    }
+
+    .logo-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-icon {
+      width: 36px;
+      height: 36px;
+      background: linear-gradient(135deg, #1f6feb, #58a6ff);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+    }
+
+    .title-area h1 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+
+    .title-area p {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 0.85rem;
+      font-weight: 500;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--card-border);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--danger);
+      box-shadow: 0 0 8px var(--danger);
+      transition: background 0.3s, box-shadow 0.3s;
+    }
+
+    .dot.online {
+      background: var(--success-glow);
+      box-shadow: 0 0 8px var(--success-glow);
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+      gap: 20px;
+    }
+
+    .card {
+      background: var(--card-bg);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      padding-bottom: 12px;
+    }
+
+    .card-header h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+
+    .metric-box {
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .metric-label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .metric-value {
+      font-size: 1.4rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .metric-sub {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .band-selector {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .band-chips {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+
+    .band-chip {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.2s;
+    }
+
+    .band-chip:hover {
+      background: rgba(88, 166, 255, 0.1);
+      border-color: var(--accent);
+    }
+
+    .band-chip input {
+      accent-color: var(--accent);
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+    }
+
+    .band-chip-label strong {
+      display: block;
+      font-size: 0.9rem;
+    }
+
+    .band-chip-label span {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .form-group label {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    input[type="text"], input[type="password"], input[type="number"], select {
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: var(--text);
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    input:focus, select:focus {
+      border-color: var(--accent);
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 10px;
+      margin-top: 6px;
+    }
+
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.2s;
+    }
+
+    button:hover {
+      background: var(--accent-hover);
+    }
+
+    button.btn-secondary {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--card-border);
+    }
+
+    button.btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    button.btn-danger {
+      background: var(--danger);
+    }
+
+    button.btn-danger:hover {
+      background: #b62324;
+    }
+
+    .quick-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .quick-link-btn {
+      text-decoration: none;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--card-border);
+      color: var(--text);
+      padding: 8px 14px;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+
+    .quick-link-btn:hover {
+      background: rgba(88, 166, 255, 0.15);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    #log-toast {
+      padding: 10px 16px;
+      background: rgba(0, 0, 0, 0.6);
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 0.8rem;
+      color: var(--accent);
+      min-height: 24px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="logo-group">
+        <div class="logo-icon">📡</div>
+        <div class="title-area">
+          <h1>ZTE K12 Control Panel</h1>
+          <p id="device-info">SmartDigital UA | ZX297520 Platform</p>
+        </div>
+      </div>
+      <div class="status-badge">
+        <div class="dot" id="status-dot"></div>
+        <span id="status-text">Підключення...</span>
+      </div>
+    </header>
+
+    <div class="grid-2">
+      <!-- Signal Telemetry Card -->
+      <section class="card">
+        <div class="card-header">
+          <h2>📊 Радіометрія соти</h2>
+          <button class="btn-secondary" style="padding: 4px 10px; font-size: 0.75rem;" onclick="fetchStatus()">Оновити</button>
+        </div>
+        <div class="metrics-grid">
+          <div class="metric-box">
+            <span class="metric-label">RSRP (Рівень сигналу)</span>
+            <span class="metric-value" id="val-rsrp">--</span>
+            <span class="metric-sub" id="sub-rsrp">Ціль: > -90 dBm</span>
+          </div>
+          <div class="metric-box">
+            <span class="metric-label">SINR / SNR (Якість)</span>
+            <span class="metric-value" id="val-sinr">--</span>
+            <span class="metric-sub" id="sub-sinr">Ціль: > 10 dB</span>
+          </div>
+          <div class="metric-box">
+            <span class="metric-label">RSSI (Загальна потужність)</span>
+            <span class="metric-value" id="val-rssi">--</span>
+            <span class="metric-sub" id="sub-rssi">Діапазон -50..-80</span>
+          </div>
+          <div class="metric-box">
+            <span class="metric-label">RSRQ (Якість прийому)</span>
+            <span class="metric-value" id="val-rsrq">--</span>
+            <span class="metric-sub" id="sub-rsrq">Ціль: > -12 dB</span>
+          </div>
+        </div>
+        <div style="font-size: 0.85rem; color: var(--text-muted); display: flex; justify-content: space-between;">
+          <span>Режим: <strong id="val-mode" style="color: var(--text);">--</strong></span>
+          <span>Бенди: <strong id="val-bands" style="color: var(--accent);">--</strong></span>
+        </div>
+      </section>
+
+      <!-- 4G Band Locking Card -->
+      <section class="card">
+        <div class="card-header">
+          <h2>🔒 Фіксація діапазонів (Band Lock)</h2>
+        </div>
+        <div class="band-selector">
+          <div class="band-chips">
+            <label class="band-chip">
+              <input type="checkbox" id="band-b3" value="0x4" checked>
+              <div class="band-chip-label">
+                <strong>Band 3 (1800 MHz)</strong>
+                <span>Міська швидкість (LTE FDD)</span>
+              </div>
+            </label>
+            <label class="band-chip">
+              <input type="checkbox" id="band-b7" value="0x40" checked>
+              <div class="band-chip-label">
+                <strong>Band 7 (2600 MHz)</strong>
+                <span>Макс. ємність / Hotspot</span>
+              </div>
+            </label>
+            <label class="band-chip">
+              <input type="checkbox" id="band-b8" value="0x80" checked>
+              <div class="band-chip-label">
+                <strong>Band 8 (900 MHz)</strong>
+                <span>Дальнє покриття / Траси</span>
+              </div>
+            </label>
+            <label class="band-chip">
+              <input type="checkbox" id="band-b20" value="0x80000" checked>
+              <div class="band-chip-label">
+                <strong>Band 20 (800 MHz)</strong>
+                <span>Глибоке проникнення</span>
+              </div>
+            </label>
+          </div>
+          <div class="btn-group">
+            <button style="flex: 1;" onclick="applyBandLock()">Застосувати вибрані</button>
+            <button class="btn-secondary" onclick="selectAllBands(true)">Всі</button>
+            <button class="btn-secondary" onclick="selectBandOnly('band-b3')">Тільки B3</button>
+            <button class="btn-secondary" onclick="selectBandOnly('band-b7')">Тільки B7</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Cell Tower Lock Card -->
+      <section class="card">
+        <div class="card-header">
+          <h2>🎯 Фіксація вишки (Cell Lock)</h2>
+        </div>
+        <div class="form-group">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="cell-earfcn">EARFCN (Частотний канал)</label>
+              <input type="number" id="cell-earfcn" placeholder="напр. 1650 (B3) / 3000 (B7)">
+            </div>
+            <div class="form-group">
+              <label for="cell-pci">PCI (Physical Cell ID 0-503)</label>
+              <input type="number" id="cell-pci" placeholder="напр. 214">
+            </div>
+          </div>
+          <div class="btn-group">
+            <button style="flex: 1;" onclick="applyCellLock()">🔒 Залочити соту</button>
+            <button class="btn-secondary" onclick="unlockCell()">🔓 Скинути (Авто)</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Settings & Quick Links Card -->
+      <section class="card">
+        <div class="card-header">
+          <h2>⚙️ Налаштування & Інженерні меню</h2>
+        </div>
+        <div class="form-group">
+          <label for="router-pwd">Пароль WebUI</label>
+          <input type="text" id="router-pwd" value="353FALM5">
+        </div>
+        <div class="quick-links">
+          <a class="quick-link-btn" href="http://192.168.0.1/#developer_options" target="_blank">🌐 Developer Options</a>
+          <a class="quick-link-btn" href="http://192.168.0.1/#network_info" target="_blank">📡 Network Info</a>
+          <a class="quick-link-btn" href="http://192.168.0.1/#network_mode" target="_blank">🔀 Router/Bridge Mode</a>
+          <a class="quick-link-btn" href="http://192.168.0.1/#TracingTool" target="_blank">🔍 Packet Trace</a>
+        </div>
+      </section>
+    </div>
+
+    <div id="log-toast">Ready</div>
+  </div>
+
+  <script>
+    const ROUTER_BASE = "http://192.168.0.1";
+    let isPolling = true;
+
+    function log(msg) {
+      document.getElementById("log-toast").innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    }
+
+    async function sha256Upper(message) {
+      const msgBuffer = new TextEncoder().encode(message);
+      const hashBuffer = await crypto.subtle.digest("SHA-256", msgBuffer);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map(b => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+    }
+
+    async function apiGet(cmd, multi = true) {
+      const url = `${ROUTER_BASE}/goform/goform_get_cmd_process?cmd=${cmd}${multi ? "&multi_data=1" : ""}&isTest=false&_=${Date.now()}`;
+      const res = await fetch(url, { headers: { "X-Requested-With": "XMLHttpRequest" } });
+      return await res.json();
+    }
+
+    async function apiPost(goformId, params = {}) {
+      const url = `${ROUTER_BASE}/goform/goform_set_cmd_process`;
+      const form = new URLSearchParams();
+      form.append("isTest", "false");
+      form.append("goformId", goformId);
+      for (const [k, v] of Object.entries(params)) {
+        form.append(k, v);
+      }
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+          "X-Requested-With": "XMLHttpRequest"
+        },
+        body: form.toString()
+      });
+      return await res.json();
+    }
+
+    async function login() {
+      try {
+        const pwd = document.getElementById("router-pwd").value;
+        const ldData = await apiGet("LD", false);
+        const ld = ldData.LD || "";
+        const p1 = await sha256Upper(pwd);
+        const pHash = await sha256Upper(p1 + ld);
+        const res = await apiPost("LOGIN", { password: pHash, save_login: "1" });
+        if (res.result === "0") {
+          log("Успішно авторизовано!");
+          return true;
+        }
+        log(`Помилка входу: ${JSON.stringify(res)}`);
+        return false;
+      } catch (err) {
+        log(`Помилка зв'язку: ${err.message}`);
+        return false;
+      }
+    }
+
+    async function fetchStatus() {
+      try {
+        const keys = "wa_inner_version,hardware_version,network_type,network_lte_rsrp,lte_rsrp,lte_rsrq,lte_snr,lte_rssi,lte_band_lock,loginfo";
+        let data = await apiGet(keys);
+        if (data.loginfo !== "ok") {
+          const ok = await login();
+          if (ok) data = await apiGet(keys);
+        }
+
+        const dot = document.getElementById("status-dot");
+        const statusText = document.getElementById("status-text");
+
+        if (data.loginfo === "ok") {
+          dot.className = "dot online";
+          statusText.innerText = "Підключено";
+
+          const rsrp = data.lte_rsrp || data.network_lte_rsrp || "--";
+          const sinr = data.lte_snr || "--";
+          const rssi = data.lte_rssi || "--";
+          const rsrq = data.lte_rsrq || "--";
+
+          document.getElementById("val-rsrp").innerText = rsrp !== "--" ? `${rsrp} dBm` : "--";
+          document.getElementById("val-sinr").innerText = sinr !== "--" ? `${sinr} dB` : "--";
+          document.getElementById("val-rssi").innerText = rssi !== "--" ? `${rssi} dBm` : "--";
+          document.getElementById("val-rsrq").innerText = rsrq !== "--" ? `${rsrq} dB` : "--";
+          document.getElementById("val-mode").innerText = data.network_type || "LTE";
+          document.getElementById("device-info").innerText = `${data.hardware_version || "K12"} | ${data.wa_inner_version || ""}`;
+
+          // Decode band
+          const bandMask = data.lte_band_lock || "0x0000800c4";
+          const bands = [];
+          const maskVal = parseInt(bandMask, 16);
+          if (maskVal & 0x4) bands.push("B3");
+          if (maskVal & 0x40) bands.push("B7");
+          if (maskVal & 0x80) bands.push("B8");
+          if (maskVal & 0x80000) bands.push("B20");
+          document.getElementById("val-bands").innerText = bands.join(", ") || bandMask;
+
+          log("Метрики оновлено.");
+        } else {
+          dot.className = "dot";
+          statusText.innerText = "Немає авторизації";
+        }
+      } catch (err) {
+        document.getElementById("status-dot").className = "dot";
+        document.getElementById("status-text").innerText = "Офлайн";
+        log(`Помилка опитування: ${err.message}`);
+      }
+    }
+
+    function selectAllBands(state) {
+      ["band-b3", "band-b7", "band-b8", "band-b20"].forEach(id => {
+        document.getElementById(id).checked = state;
+      });
+    }
+
+    function selectBandOnly(targetId) {
+      ["band-b3", "band-b7", "band-b8", "band-b20"].forEach(id => {
+        document.getElementById(id).checked = (id === targetId);
+      });
+      applyBandLock();
+    }
+
+    async function applyBandLock() {
+      let total = 0;
+      if (document.getElementById("band-b3").checked) total += 0x4;
+      if (document.getElementById("band-b7").checked) total += 0x40;
+      if (document.getElementById("band-b8").checked) total += 0x80;
+      if (document.getElementById("band-b20").checked) total += 0x80000;
+
+      const hexMask = "0x" + total.toString(16).padStart(16, "0");
+      log(`Застосування маски бендів: ${hexMask}...`);
+      const res = await apiPost("BAND_SELECT", {
+        is_gw_band: "0",
+        gw_band_mask: "0",
+        is_lte_band: "1",
+        lte_band_mask: hexMask
+      });
+      log(`Результат: ${JSON.stringify(res)}`);
+      setTimeout(fetchStatus, 1500);
+    }
+
+    async function applyCellLock() {
+      const earfcn = document.getElementById("cell-earfcn").value;
+      const pci = document.getElementById("cell-pci").value;
+      if (!earfcn || !pci) {
+        alert("Будь ласка, введіть EARFCN та PCI!");
+        return;
+      }
+      log(`Фіксація на соті EARFCN=${earfcn}, PCI=${pci}...`);
+      const res = await apiPost("LTE_LOCK_CELL_SET", {
+        lte_earfcn_lock: earfcn,
+        lte_pci_lock: pci
+      });
+      log(`Результат фіксації: ${JSON.stringify(res)}`);
+      setTimeout(fetchStatus, 1500);
+    }
+
+    async function unlockCell() {
+      log("Скидання фіксації соти...");
+      const res = await apiPost("LTE_LOCK_CELL_SET", {
+        lte_earfcn_lock: "0",
+        lte_pci_lock: "0"
+      });
+      log(`Результат скидання: ${JSON.stringify(res)}`);
+      setTimeout(fetchStatus, 1500);
+    }
+
+    // Auto-polling on startup
+    fetchStatus();
+    setInterval(fetchStatus, 2500);
+  </script>
+</body>
+</html>
