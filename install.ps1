@@ -1,6 +1,5 @@
 # ==============================================================================
 #  ZTE K12 Mobile Controller & IP Rotator - 1-Click Windows Installer & Service
-#  Usage: irm https://raw.githubusercontent.com/miwaniza/zte-k12-rotator/main/install.ps1 | iex
 # ==============================================================================
 
 $ErrorActionPreference = "Stop"
@@ -57,21 +56,13 @@ Write-Host "[*] Configuring Windows Background Service (Auto-Start on Logon)..."
 try {
     $ExePath = "$InstallDir\zte-control.exe"
     $TaskName = "ZTEK12RotatorService"
-    $TaskAction = "`"$ExePath`" ui --no-open"
+    $TaskAction = "'$ExePath' ui --no-open"
     
-    # Try creating elevated task, fallback to user level
-    $schArgsElevated = @("/Create", "/TN", $TaskName, "/TR", $TaskAction, "/SC", "ONLOGON", "/RL", "HIGHEST", "/F")
-    $p = Start-Process -FilePath "schtasks" -ArgumentList $schArgsElevated -Wait -PassThru -NoNewWindow
-    if ($p.ExitCode -ne 0) {
-        $schArgsUser = @("/Create", "/TN", $TaskName, "/TR", $TaskAction, "/SC", "ONLOGON", "/F")
-        Start-Process -FilePath "schtasks" -ArgumentList $schArgsUser -Wait -NoNewWindow
-    }
-    
-    # Start the service task
+    Start-Process -FilePath "schtasks" -ArgumentList @("/Create", "/TN", $TaskName, "/TR", $TaskAction, "/SC", "ONLOGON", "/F") -Wait -NoNewWindow
     Start-Process -FilePath "schtasks" -ArgumentList @("/Run", "/TN", $TaskName) -Wait -NoNewWindow
     Write-Host "[+] Windows Background Service registered & started!" -ForegroundColor Green
 } catch {
-    Write-Host "[!] Service registration warning: $_" -ForegroundColor Yellow
+    Write-Host "[!] Service registration notice: $_" -ForegroundColor Yellow
 }
 
 # 6. Create Desktop & Start Menu Shortcuts
