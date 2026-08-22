@@ -1,38 +1,53 @@
-name: Build and Publish Releases
+name: CI/CD Build and Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Publish/Update GitHub Release with build artifacts'
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
 
 jobs:
+  # -------------------------------------------------------------
+  # 1. Multi-Platform Build Matrix
+  # -------------------------------------------------------------
   build:
-    name: Build - ${{ matrix.os }} (${{ matrix.target }})
+    name: Build - ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
+          - name: Windows x64
+            os: windows-latest
             target: x86_64-pc-windows-msvc
-            binary_name: zte-control.exe
-            archive_name: zte-control-windows-x64.zip
-          - os: macos-latest
+            binary: zte-control.exe
+            archive: zte-control-windows-x64.zip
+
+          - name: macOS Universal (ARM64 + x86_64)
+            os: macos-latest
             target: aarch64-apple-darwin
-            binary_name: zte-control
-            archive_name: zte-control-macos-arm64.tar.gz
-          - os: macos-13
-            target: x86_64-apple-darwin
-            binary_name: zte-control
-            archive_name: zte-control-macos-x64.tar.gz
-          - os: ubuntu-latest
+            binary: zte-control
+            archive: zte-control-macos-universal.tar.gz
+
+          - name: Linux x64
+            os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            binary_name: zte-control
-            archive_name: zte-control-linux-x64.tar.gz
+            binary: zte-control
+            archive: zte-control-linux-x64.tar.gz
 
     steps:
       - name: Checkout repository
@@ -43,14 +58,36 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install macOS x86_64 Target (for Universal Binary)
+        if: matrix.os == 'macos-latest'
+        run: rustup target add x86_64-apple-darwin
+
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
 
-      - name: Build Binary
+      - name: Build Windows Binary
+        if: matrix.os == 'windows-latest'
         run: cargo build --release --target ${{ matrix.target }}
 
+      - name: Build macOS Universal Binary
+        if: matrix.os == 'macos-latest'
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          mkdir -p target/universal
+          lipo -create \
+            target/aarch64-apple-darwin/release/zte-control \
+            target/x86_64-apple-darwin/release/zte-control \
+            -output target/universal/zte-control
+          lipo -info target/universal/zte-control
+
+      - name: Build Linux Binary
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # Package Windows Distribution (Full Zip with all scripts)
       - name: Package Windows Complete Dist (Zip)
         if: matrix.os == 'windows-latest'
         shell: pwsh
@@ -61,34 +98,49 @@ jobs:
           
           Copy-Item "target/${{ matrix.target }}/release/zte-control.exe" "$DistDir/zte-control.exe" -Force
           Copy-Item "web/index.html" "$DistDir/web/index.html" -Force
-          Copy-Item "tools/*" "$DistDir/tools/" -Recurse -Force
-          Copy-Item "*.bat" "$DistDir/" -Force
+          Copy-Item "web/manifest.json" "$DistDir/web/manifest.json" -Force -ErrorAction SilentlyContinue
+          Copy-Item "web/sw.js" "$DistDir/web/sw.js" -Force -ErrorAction SilentlyContinue
+          Copy-Item "web/icon.svg" "$DistDir/web/icon.svg" -Force -ErrorAction SilentlyContinue
+          Copy-Item "tools/*" "$DistDir/tools/" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item "*.bat" "$DistDir/" -Force -ErrorAction SilentlyContinue
+          Copy-Item "rotate-and-notify.ps1" "$DistDir/" -Force -ErrorAction SilentlyContinue
           Copy-Item "README_WINDOWS.txt" "$DistDir/" -Force -ErrorAction SilentlyContinue
 
           Compress-Archive -Path "$DistDir/*" -DestinationPath "dist/zte-k12-rotator-windows.zip" -Force
-          Copy-Item "target/${{ matrix.target }}/release/zte-control.exe" "${{ matrix.binary_name }}"
+          Copy-Item "target/${{ matrix.target }}/release/zte-control.exe" "${{ matrix.binary }}"
 
-      - name: Package Unix Archive
-        if: matrix.os != 'windows-latest'
+      # Package macOS Archive
+      - name: Package macOS Universal Archive
+        if: matrix.os == 'macos-latest'
         run: |
-          cp target/${{ matrix.target }}/release/zte-control ${{ matrix.binary_name }}
-          tar -czf ${{ matrix.archive_name }} -C target/${{ matrix.target }}/release zte-control
+          cp target/universal/zte-control ${{ matrix.binary }}
+          tar -czf ${{ matrix.archive }} -C target/universal zte-control
+
+      # Package Linux Archive
+      - name: Package Linux Archive
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cp target/${{ matrix.target }}/release/zte-control ${{ matrix.binary }}
+          tar -czf ${{ matrix.archive }} -C target/${{ matrix.target }}/release zte-control
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
           path: |
-            ${{ matrix.binary_name }}
-            ${{ matrix.archive_name }}
+            ${{ matrix.binary }}
+            ${{ matrix.archive }}
             dist/zte-k12-rotator-windows.zip
           if-no-files-found: ignore
 
+  # -------------------------------------------------------------
+  # 2. Release Publisher (On Tag or Workflow Dispatch)
+  # -------------------------------------------------------------
   publish:
-    name: Publish GitHub Release
+    name: Publish Release Assets
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release != 'false')
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -101,16 +153,18 @@ jobs:
       - name: Prepare Release Assets
         run: |
           mkdir -p release_assets
-          find artifacts -type f -name "*.exe" -o -name "zte-control" -o -name "*.zip" -o -name "*.tar.gz" | while read file; do
-            cp "$file" release_assets/
+          find artifacts -type f \( -name "*.exe" -o -name "zte-control" -o -name "*.zip" -o -name "*.tar.gz" \) | while read file; do
+            cp -v "$file" release_assets/
           done
+          echo "=== Collected Release Assets ==="
           ls -lh release_assets/
 
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && format('ZTE K12 Rotator {0}', github.ref_name) || 'ZTE K12 Rotator v1.0.0 (Latest)' }}
           files: release_assets/*
-          name: Release ${{ github.ref_name }}
           generate_release_notes: true
           draft: false
           prerelease: false
