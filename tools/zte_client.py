@@ -6,6 +6,7 @@ Features:
 - Full SHA-256 Challenge-Response Authentication (LD salt + SHA256)
 - Session persistence via cookies
 - Baseband RF Metrics (RSRP, RSSI, SINR, RSRQ, Band, WAN IP)
+- Live RF signal monitoring / dashboard
 - Developer Options & Tracing Tool URL generation
 - Band & Cell locking queries
 """
@@ -74,15 +75,11 @@ class ZTEK12Client:
 
     def login(self, password="353FALM5"):
         """Perform challenge-response login using router LD salt."""
-        # 1. Fetch fresh LD salt
         res_ld = self.goform_get("LD", multi_data=False)
         ld = res_ld.get("LD", "")
-        
-        # 2. Compute SHA256(SHA256(pwd) + LD)
         p1 = self.sha256_upper(password)
         p_hash = self.sha256_upper(p1 + ld)
 
-        # 3. Post login
         url = f"{self.base_url}/goform/goform_set_cmd_process"
         payload = f"isTest=false&goformId=LOGIN&password={p_hash}&save_login=1"
         res = self._exec(url, post_data=payload)
@@ -100,6 +97,29 @@ class ZTEK12Client:
         ]
         res = self.goform_get(keys)
         return {k: v for k, v in res.items() if v != ""}
+
+    def monitor(self, interval=2.0):
+        """Live monitor signal levels and network status."""
+        print(f"[*] Starting live cellular signal monitor (interval: {interval}s). Press Ctrl+C to stop.")
+        print(f"{'Time':<8} | {'Network Mode':<20} | {'RSRP':<7} | {'RSSI':<7} | {'SINR':<6} | {'RSRQ':<6} | {'Band Mask'}")
+        print("-" * 75)
+        try:
+            while True:
+                status = self.get_status()
+                if status.get("loginfo") != "ok":
+                    self.login()
+                    status = self.get_status()
+                ts = time.strftime("%H:%M:%S")
+                mode = status.get("network_type", "N/A")
+                rsrp = status.get("lte_rsrp", status.get("network_lte_rsrp", "N/A"))
+                rssi = status.get("lte_rssi", "N/A")
+                sinr = status.get("lte_snr", status.get("network_sinr", "N/A"))
+                rsrq = status.get("lte_rsrq", "N/A")
+                band = status.get("lte_band_lock", "N/A")
+                print(f"{ts:<8} | {mode:<20} | {rsrp:<7} | {rssi:<7} | {sinr:<6} | {rsrq:<6} | {band}")
+                time.sleep(interval)
+        except KeyboardInterrupt:
+            print("\n[*] Monitoring stopped.")
 
     def set_language(self, lang="uk"):
         """Set router WebUI language (uk / en)."""
@@ -122,6 +142,10 @@ def main():
     # Status
     subparsers.add_parser("status", help="Get full cellular RF signal & device status")
 
+    # Monitor
+    mon_p = subparsers.add_parser("monitor", help="Live monitor cellular RF signal in real time")
+    mon_p.add_argument("--interval", "-i", type=float, default=2.0, help="Polling interval in seconds (default: 2)")
+
     # Set Language
     lang_p = subparsers.add_parser("set-lang", help="Set WebUI language")
     lang_p.add_argument("lang", choices=["uk", "en"], help="Language code")
@@ -143,6 +167,9 @@ def main():
             client.login()
             status = client.get_status()
         print(json.dumps(status, indent=2, ensure_ascii=False))
+
+    elif args.command == "monitor":
+        client.monitor(interval=args.interval)
 
     elif args.command == "set-lang":
         res = client.set_language(args.lang)
