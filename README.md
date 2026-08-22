@@ -1,72 +1,42 @@
-# ZTE K12 (ZX297520) Universal Control Suite
+# 📡 ZTE K12 Mobile Controller & IP Rotator
 
-A complete, cross-platform (macOS / Windows / Linux) native Rust toolkit and modern Web Dashboard for managing **ZTE K12** 4G LTE routers (SmartDigital UA, firmware `BD_SMARTDIGITALUAK12V1.0.0B01`).
+Universal LTE Band Lock, Cell Locking, Guaranteed IP Rotator, and Web Control Dashboard for **ZTE K12** (ZX297520 / Kyivstar 4G LTE).
 
 ---
 
-## 🚀 Options for Controlling the Router
+## ⚡ 1-Click Windows Installation (PowerShell)
 
-### Option 1: Native Rust CLI & Universal Web Server (`zte-control`)
+Open **PowerShell** and run:
 
-Compiled directly for **macOS (Apple Silicon & Intel)** and **Windows (x86_64)**:
+```powershell
+irm https://raw.githubusercontent.com/miwaniza/zte-k12-rotator/main/install.ps1 | iex
+```
+
+### What this does:
+1. Automatically downloads and unpacks `zte-control.exe`, 1-click batch scripts, and web UI to `%LOCALAPPDATA%\zte-k12-rotator`.
+2. Creates a **Desktop Shortcut** `ZTE K12 Controller` and **Start Menu** shortcut.
+3. Adds `zte-control` to your user `PATH`.
+4. Automatically launches the Web Dashboard at `http://127.0.0.1:8080`.
+
+---
+
+## ⚡ 1-Click macOS / Linux Installation (Terminal)
+
+Open **Terminal** and run:
 
 ```bash
-# 1. Launch the standalone Web Dashboard in your browser:
-cargo run --release -- ui
-# OR directly using the binary:
-./target/release/zte-control ui
-
-# 2. Check cellular radio signal metrics (RSRP, RSSI, SINR, RSRQ):
-./target/release/zte-control status
-
-# 3. Live monitor signal in terminal (useful for antenna alignment):
-./target/release/zte-control monitor
-
-# 4. Lock specific LTE bands:
-./target/release/zte-control lock-band B3
-./target/release/zte-control lock-band B3 B7
-./target/release/zte-control lock-band ALL
-
-# 5. Lock specific cell tower sector (EARFCN + PCI):
-./target/release/zte-control lock-cell --earfcn 1650 --pci 214 --reconnect
-./target/release/zte-control unlock-cell --reconnect
+curl -fsSL https://raw.githubusercontent.com/miwaniza/zte-k12-rotator/main/install.sh | bash
 ```
 
 ---
 
-### Option 2: Standalone Static Web Dashboard (`web/index.html`)
+## 🚀 Key Features
 
-A single-file HTML5/CSS3/JavaScript web application located at [web/index.html](web/index.html).
-
-* **Zero external dependencies**: runs directly in any browser (Chrome, Edge, Safari, Firefox).
-* **Cross-platform**: works on macOS, Windows, Linux, iOS, and Android.
-* **Features**:
-  * Live visual meters for **RSRP, SINR, RSSI, RSRQ**.
-  * 1-Click **4G Band Selection** (B3, B7, B8, B20 toggles).
-  * **Cell Tower Lock Form** with EARFCN + PCI inputs.
-  * Direct one-click links to the router's internal `#developer_options` and `#network_info`.
-
-To open it in your browser:
-```bash
-open web/index.html
-# On Windows: start web/index.html
-```
-
----
-
-### Option 3: Python Interactive Terminal Dashboard
-
-```bash
-python3 tools/cell_control.py menu
-```
-
----
-
-## 📂 Repository Structure
-
-* [src/main.rs](src/main.rs) — Native Rust universal controller & embedded UI server.
-* [web/index.html](web/index.html) — Standalone single-file modern Web Dashboard.
-* [tools/cell_control.py](tools/cell_control.py) — Python interactive TUI & CLI management script.
-* [docs/zte_k12_platform_architecture.md](docs/zte_k12_platform_architecture.md) — Hardware architecture, SoC specs, flash layout.
-* [docs/goform_api_reference.md](docs/goform_api_reference.md) — Reverse-engineered GoForm endpoint catalogue.
-* [docs/firmware_dump_and_mod_strategy.md](docs/firmware_dump_and_mod_strategy.md) — Firmware extraction and modification guide.
+* **✈️ Airplane Reconnect (ЯК НА IPHONE)**: Native baseband radio reset cycling Kyivstar cellular bearer to acquire a brand-new WAN & Public IP in ~3s.
+* **🛡️ Guaranteed Distinct IP Loop**: Automatically verifies `New IP != Prior IP` upon rotation, cycling frequency bands (Band 3 ⇄ Band 8 ⇄ Band 7 ⇄ Band 20) until a guaranteed different IP is assigned.
+* **🌐 Current vs Prior Comparison Table**: Instant property-by-property comparison (Public IP, Location, ISP, Tower, Signal RSRP, WAN IP) with smooth entry animations.
+* **🗼 Master Tower Catalog**: Live scanner for Band 3 (1800), Band 7 (2600), Band 8 (900), Band 20 (800) with 4-bar signal meters, frequency tabs, and safe fallback watchdog.
+* **🔌 REST API / Webhooks**:
+  * Trigger Reconnect / New IP: `curl http://127.0.0.1:8080/api/reconnect`
+  * Trigger Band-Hop Rotate: `curl http://127.0.0.1:8080/api/rotate`
+  * Query Geo-IP: `curl http://127.0.0.1:8080/api/geo`
