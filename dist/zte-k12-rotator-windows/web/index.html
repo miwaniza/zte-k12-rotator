@@ -44,6 +44,7 @@
       flex-direction: column;
       padding: 8px 12px;
       gap: 6px;
+      position: relative;
     }
 
     /* Custom Slim Scrollbars */
@@ -67,7 +68,7 @@
 
     .header-left { display: flex; align-items: center; gap: 10px; font-weight: 600; color: var(--text-bright); }
     .header-badge { font-size: 11px; padding: 2px 8px; border-radius: 4px; background: #21262d; border: 1px solid var(--card-border); color: var(--text-muted); }
-    .header-right { display: flex; align-items: center; gap: 12px; font-size: 12px; }
+    .header-right { display: flex; align-items: center; gap: 10px; font-size: 12px; }
 
     .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); display: inline-block; }
     .dot.online { background: var(--success-bright); box-shadow: 0 0 6px var(--success-bright); }
@@ -284,6 +285,29 @@
     .scan-banner.active { display: flex; }
     .scan-bar-fill { height: 4px; background: var(--accent); width: 0%; border-radius: 2px; transition: width 0.2s; }
 
+    /* Floating In-App Toast Popup */
+    .toast-popup {
+      position: fixed;
+      top: 14px;
+      right: 14px;
+      background: #1c2128;
+      border: 1px solid var(--success-bright);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.6), 0 0 12px rgba(46, 160, 67, 0.3);
+      border-radius: 8px;
+      padding: 10px 14px;
+      z-index: 9999;
+      display: none;
+      align-items: center;
+      gap: 10px;
+      color: var(--text-bright);
+      font-size: 12px;
+      animation: toastIn 0.3s ease-out;
+    }
+    @keyframes toastIn {
+      from { transform: translateX(50px); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+
     /* Footer Toast */
     footer {
       display: flex;
@@ -302,6 +326,15 @@
   </style>
 </head>
 <body>
+  <!-- In-App Floating Toast Notification -->
+  <div id="toast-popup" class="toast-popup">
+    <span style="font-size: 20px;">📡</span>
+    <div>
+      <div id="toast-title" style="font-weight: 700; color: var(--success-bright);">IP успішно змінено!</div>
+      <div id="toast-body" style="font-family: monospace; font-size: 11px; color: var(--text);">--</div>
+    </div>
+  </div>
+
   <!-- Header Bar -->
   <header>
     <div class="header-left">
@@ -485,6 +518,127 @@
     let ipHistory = JSON.parse(localStorage.getItem("zte_ip_history") || "[]");
     let lastGeoData = null;
 
+    let deferredInstallPrompt = null;
+    let swRegistration = null;
+
+    // 1. Register Service Worker for PWA & Native Notifications
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .then((reg) => {
+            swRegistration = reg;
+            log('PWA Service Worker зареєстровано.');
+          })
+          .catch((err) => console.log('SW error:', err));
+      });
+    }
+
+    // 2. Handle PWA installation prompt
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredInstallPrompt = e;
+      const installBtn = document.getElementById('pwa-install-btn');
+      if (installBtn) installBtn.style.display = 'inline-flex';
+    });
+
+    function installPWA() {
+      if (deferredInstallPrompt) {
+        deferredInstallPrompt.prompt();
+        deferredInstallPrompt.userChoice.then((choice) => {
+          if (choice.outcome === 'accepted') {
+            document.getElementById('pwa-install-btn').style.display = 'none';
+          }
+          deferredInstallPrompt = null;
+        });
+      }
+    }
+
+    // 3. Notification Permission Management
+    function updateNotificationButtonUI() {
+      const btn = document.getElementById('notif-toggle-btn');
+      if (!btn) return;
+      if (!('Notification' in window)) {
+        btn.style.display = 'none';
+        return;
+      }
+      if (Notification.permission === 'granted') {
+        btn.innerText = '🔔 Сповіщення: Увімк. ✅';
+        btn.style.borderColor = 'var(--success-bright)';
+        btn.style.color = 'var(--success-bright)';
+      } else if (Notification.permission === 'denied') {
+        btn.innerText = '🔕 Сповіщення: Заблоковано';
+        btn.style.color = 'var(--danger)';
+      } else {
+        btn.innerText = '🔔 Увімкнути сповіщення';
+      }
+    }
+
+    async function requestNotificationPermission() {
+      if ('Notification' in window) {
+        const perm = await Notification.requestPermission();
+        updateNotificationButtonUI();
+        if (perm === 'granted') {
+          showSystemNotification(curPublicIp || curWanIp || "178.54.12.89", curKey ? towerDatabase[curKey]?.band : 'Band 3', curPci || '166');
+        }
+      }
+    }
+
+    function showSystemNotification(newIp, band, pci) {
+      const city = lastGeoData?.city || 'Київ';
+      const isp = lastGeoData?.connection?.isp || 'Kyivstar';
+      const title = '📡 ZTE K12: IP успішно змінено! ✅';
+      const bodyText = `🌐 Новий IP: ${newIp} (${city}, ${isp})\n🗼 Вишка: ${band} (PCI ${pci})`;
+
+      // A. Show In-App Visual Toast
+      const toast = document.getElementById('toast-popup');
+      const tTitle = document.getElementById('toast-title');
+      const tBody = document.getElementById('toast-body');
+      if (toast && tBody) {
+        tTitle.innerText = title;
+        tBody.innerText = `${newIp} (${city}) | ${band} (PCI ${pci})`;
+        toast.style.display = 'flex';
+        setTimeout(() => { toast.style.display = 'none'; }, 4500);
+      }
+
+      // B. Show Native OS Notification via PWA Service Worker
+      if ('Notification' in window) {
+        if (Notification.permission === 'granted') {
+          const options = {
+            body: bodyText,
+            icon: '/icon.svg',
+            badge: '/icon.svg',
+            tag: 'zte-ip-rotation',
+            renotify: true,
+            silent: false
+          };
+
+          if (swRegistration && swRegistration.showNotification) {
+            swRegistration.showNotification(title, options);
+          } else {
+            try { new Notification(title, options); } catch(e){}
+          }
+        } else if (Notification.permission === 'default') {
+          Notification.requestPermission().then(perm => {
+            updateNotificationButtonUI();
+            if (perm === 'granted') {
+              showSystemNotification(newIp, band, pci);
+            }
+          });
+        }
+      }
+    }
+
+    // 4. Handle PWA Action query parameters
+    function handleUrlActions() {
+      const params = new URLSearchParams(window.location.search);
+      const action = params.get('action');
+      if (action === 'airplane') {
+        setTimeout(() => guaranteedDistinctReconnect(), 800);
+      } else if (action === 'rotate') {
+        setTimeout(() => guaranteedDistinctRotate(), 800);
+      }
+    }
+
     const ROTATION_BANDS = [
       { name: "Band 3 (1800 MHz)", mask: "0x0000000000000004" },
       { name: "Band 8 (900 MHz)",  mask: "0x0000000000000080" },
@@ -663,7 +817,6 @@
       const currentBand = curKey ? (towerDatabase[curKey]?.band || "LTE") : "LTE";
       const currentRsrp = document.getElementById("val-rsrp")?.innerText || "--";
 
-      // Prevent duplicate insertion
       if (ipHistory.length > 0 && ipHistory[0].ip === curPublicIp && ipHistory[0].wanIp === curWanIp) {
         return;
       }
@@ -805,9 +958,12 @@
           const rsrq = data.lte_rsrq || "--";
           const newWanIp = data.wan_ipaddr || "";
 
-          // If WAN IP changed, archive old session
+          // Automatically detect background IP change and show notification!
           if (curWanIp && newWanIp && curWanIp !== newWanIp) {
             recordCurrentToHistory();
+            fetchGeoLocation().then(geo => {
+              showSystemNotification(geo?.ip || newWanIp, data.wan_active_band || "LTE", data.lte_pci || "--");
+            });
           }
           curWanIp = newWanIp;
 
@@ -1118,104 +1274,6 @@
         fetchStatus();
         fetchGeoLocation();
       }, 2000);
-    }
-
-    let deferredInstallPrompt = null;
-    let swRegistration = null;
-
-    // 1. Register Service Worker
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js')
-          .then((reg) => {
-            swRegistration = reg;
-            log('PWA Service Worker зареєстровано.');
-          })
-          .catch((err) => console.log('SW error:', err));
-      });
-    }
-
-    // 2. Handle PWA installation prompt
-    window.addEventListener('beforeinstallprompt', (e) => {
-      e.preventDefault();
-      deferredInstallPrompt = e;
-      const installBtn = document.getElementById('pwa-install-btn');
-      if (installBtn) installBtn.style.display = 'inline-flex';
-    });
-
-    function installPWA() {
-      if (deferredInstallPrompt) {
-        deferredInstallPrompt.prompt();
-        deferredInstallPrompt.userChoice.then((choice) => {
-          if (choice.outcome === 'accepted') {
-            document.getElementById('pwa-install-btn').style.display = 'none';
-          }
-          deferredInstallPrompt = null;
-        });
-      }
-    }
-
-    // 3. Notification Permission Management
-    function updateNotificationButtonUI() {
-      const btn = document.getElementById('notif-toggle-btn');
-      if (!btn) return;
-      if (!('Notification' in window)) {
-        btn.style.display = 'none';
-        return;
-      }
-      if (Notification.permission === 'granted') {
-        btn.innerText = '🔔 Сповіщення: Увімк.';
-        btn.style.borderColor = 'var(--success-bright)';
-        btn.style.color = 'var(--success-bright)';
-      } else if (Notification.permission === 'denied') {
-        btn.innerText = '🔕 Сповіщення: Заблоковано';
-        btn.style.color = 'var(--danger)';
-      } else {
-        btn.innerText = '🔔 Увімкнути сповіщення';
-      }
-    }
-
-    async function requestNotificationPermission() {
-      if ('Notification' in window) {
-        const perm = await Notification.requestPermission();
-        updateNotificationButtonUI();
-        if (perm === 'granted') {
-          showSystemNotification(curPublicIp || curWanIp, curKey ? towerDatabase[curKey]?.band : 'LTE', curPci);
-        }
-      }
-    }
-
-    function showSystemNotification(newIp, band, pci) {
-      if ('Notification' in window && Notification.permission === 'granted') {
-        const city = lastGeoData?.city || 'Київ';
-        const isp = lastGeoData?.connection?.isp || 'Kyivstar';
-        const title = '📡 ZTE K12: IP успішно змінено! ✅';
-        const options = {
-          body: `🌐 Новий IP: ${newIp} (${city}, ${isp})\n🗼 Вишка: ${band} (PCI ${pci})`,
-          icon: '/icon.svg',
-          badge: '/icon.svg',
-          tag: 'zte-ip-rotation',
-          renotify: true,
-          requireInteraction: false
-        };
-
-        if (swRegistration && swRegistration.showNotification) {
-          swRegistration.showNotification(title, options);
-        } else {
-          new Notification(title, options);
-        }
-      }
-    }
-
-    // 4. Handle PWA Action query parameters (/?action=airplane or /?action=rotate)
-    function handleUrlActions() {
-      const params = new URLSearchParams(window.location.search);
-      const action = params.get('action');
-      if (action === 'airplane') {
-        setTimeout(() => guaranteedDistinctReconnect(), 800);
-      } else if (action === 'rotate') {
-        setTimeout(() => guaranteedDistinctRotate(), 800);
-      }
     }
 
     async function checkForAppUpdates() {
