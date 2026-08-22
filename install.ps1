@@ -1,6 +1,6 @@
 # ==============================================================================
 #  ZTE K12 Mobile Controller & IP Rotator - 1-Click Windows Installer
-#  (100% Pure PowerShell Edition - No VBScript Dependencies)
+#  (100% Native Windows 10/11 Pure PowerShell Edition)
 # ==============================================================================
 
 $ErrorActionPreference = "Stop"
@@ -15,14 +15,19 @@ $InstallDir = "$env:LOCALAPPDATA\zte-k12-rotator"
 $ZipUrl = "https://raw.githubusercontent.com/miwaniza/zte-k12-rotator/main/dist/zte-k12-rotator-windows.zip"
 $TempZip = "$env:TEMP\zte-k12-rotator-windows.zip"
 
-Write-Host "[*] Target Installation Directory: $InstallDir" -ForegroundColor Gray
+Write-Host "[*] Target Directory: $InstallDir" -ForegroundColor Gray
 
-# 1. Create target directory
+# 1. Stop existing process if running to avoid file lock
+Write-Host "[*] Checking running processes..." -ForegroundColor Gray
+Stop-Process -Name "zte-control" -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 500
+
+# 2. Create target directory
 if (-not (Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 }
 
-# 2. Download package
+# 3. Download package
 Write-Host "[*] Downloading latest release from GitHub..." -ForegroundColor Cyan
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
@@ -32,7 +37,7 @@ try {
     Exit 1
 }
 
-# 3. Extract package
+# 4. Extract package directly into InstallDir
 Write-Host "[*] Extracting application files..." -ForegroundColor Cyan
 try {
     Expand-Archive -Path $TempZip -DestinationPath $InstallDir -Force
@@ -41,7 +46,7 @@ try {
     Write-Host "[!] Extraction notice: $_" -ForegroundColor Yellow
 }
 
-# 4. Write pure PowerShell rotation script
+# 5. Write pure PowerShell rotation script
 $PsRotateContent = @'
 $ErrorActionPreference = "SilentlyContinue"
 $InstallDir = "$env:LOCALAPPDATA\zte-k12-rotator"
@@ -70,6 +75,7 @@ try {
     if ($geo.ip) {
         $NewIp = $geo.ip
         if ($geo.city) { $City = $geo.city }
+        if ($geo.country_code) { $Country = $geo.country_code }
         if ($geo.connection.isp) { $Isp = $geo.connection.isp }
     }
 } catch {}
@@ -121,7 +127,7 @@ if (-not $toastShown) {
 '@
 Set-Content -Path "$InstallDir\rotate-and-notify.ps1" -Value $PsRotateContent -Force
 
-# 5. Add to User PATH
+# 6. Add to User PATH
 $UserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
 if ($UserPath -notlike "*$InstallDir*") {
     Write-Host "[+] Adding $InstallDir to User PATH..." -ForegroundColor Green
@@ -129,23 +135,21 @@ if ($UserPath -notlike "*$InstallDir*") {
     $env:PATH += ";$InstallDir"
 }
 
-# 6. Register Background Service via PowerShell
+# 7. Register Background Service (Native PowerShell Scheduled Task)
 Write-Host "[*] Configuring Background Service..." -ForegroundColor Cyan
 try {
     $TaskName = "ZTEK12RotatorService"
-    $TaskAction = "powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command `"Start-Process '$InstallDir\zte-control.exe' -ArgumentList 'ui','--no-open' -WindowStyle Hidden`""
-
-    & schtasks /Create /TN $TaskName /TR $TaskAction /SC ONLOGON /RL HIGHEST /F 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        & schtasks /Create /TN $TaskName /TR $TaskAction /SC ONLOGON /F 2>$null
-    }
-    & schtasks /Run /TN $TaskName 2>$null
-    Write-Host "[+] Background Service registered & started!" -ForegroundColor Green
+    $action = New-ScheduledTaskAction -Execute "$InstallDir\zte-control.exe" -Argument "ui --no-open"
+    $trigger = New-ScheduledTaskTrigger -AtLogon
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Force -ErrorAction SilentlyContinue | Out-Null
+    Start-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    Write-Host "[+] Background Service registered via Windows Task Scheduler!" -ForegroundColor Green
 } catch {
-    Write-Host "[!] Service notice: $_" -ForegroundColor Yellow
+    # Fallback to direct background execution
+    Start-Process "$InstallDir\zte-control.exe" -ArgumentList "ui","--no-open" -WindowStyle Hidden -ErrorAction SilentlyContinue
 }
 
-# 7. Create Pure PowerShell Shortcuts (Desktop, Start Menu, Taskbar)
+# 8. Create Pure PowerShell Shortcuts (Desktop, Start Menu, Taskbar)
 try {
     $WshShell = New-Object -ComObject WScript.Shell
     $DesktopPath = [Environment]::GetFolderPath("Desktop")
@@ -199,13 +203,13 @@ try {
     Write-Host "[!] Shortcuts notice: $_" -ForegroundColor Yellow
 }
 
-# Start UI server if not running
+# Launch UI in background if not already running
 Start-Process "$InstallDir\zte-control.exe" -ArgumentList "ui","--no-open" -WindowStyle Hidden -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 1
 
 Write-Host ""
 Write-Host "==================================================================" -ForegroundColor Green
-Write-Host "   ✅ INSTALLATION & SHORTCUTS COMPLETE (PURE POWERSHELL)!        " -ForegroundColor Green
+Write-Host "   ✅ INSTALLATION & SHORTCUTS COMPLETE!                          " -ForegroundColor Green
 Write-Host "==================================================================" -ForegroundColor Green
 Write-Host "  📂 Directory:       $InstallDir" -ForegroundColor White
 Write-Host "  ⚡ 1-Click Rotate:  Ярлик '⚡ Ротація IP (ZTE)' на Робочому столі" -ForegroundColor White
