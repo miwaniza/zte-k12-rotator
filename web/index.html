@@ -31,14 +31,14 @@
       font-family: var(--font);
       background-color: var(--bg);
       color: var(--text);
-      font-size: 13px;
+      font-size: 12.5px;
     }
 
     body {
       display: flex;
       flex-direction: column;
       padding: 8px 12px;
-      gap: 8px;
+      gap: 6px;
     }
 
     /* Custom Slim Scrollbars */
@@ -55,8 +55,8 @@
       background: var(--card-bg);
       border: 1px solid var(--card-border);
       border-radius: 6px;
-      padding: 6px 12px;
-      height: 36px;
+      padding: 5px 12px;
+      height: 34px;
       flex-shrink: 0;
     }
 
@@ -96,76 +96,33 @@
       align-items: center;
       gap: 6px;
       white-space: nowrap;
-      transition: background 0.15s, border-color 0.15s;
+      transition: background 0.2s, border-color 0.2s, transform 0.15s;
     }
-    button:hover { background: #30363d; border-color: #8b949e; }
-    button:active { background: #161b22; }
+    button:hover { background: #30363d; border-color: #8b949e; transform: translateY(-1px); }
+    button:active { background: #161b22; transform: translateY(0); }
     button.btn-primary { background: #238636; border-color: rgba(240, 246, 252, 0.1); color: #fff; }
-    button.btn-primary:hover { background: #2ea043; }
+    button.btn-primary:hover { background: #2ea043; box-shadow: 0 0 8px rgba(46, 160, 67, 0.4); }
     button.btn-purple { background: #6e40c9; border-color: rgba(240, 246, 252, 0.1); color: #fff; }
-    button.btn-purple:hover { background: #8957e5; }
+    button.btn-purple:hover { background: #8957e5; box-shadow: 0 0 8px rgba(137, 87, 229, 0.4); }
     button.btn-sm { padding: 3px 8px; font-size: 11px; }
 
-    /* Current vs Prior Connection Comparison Banner */
-    .compare-strip {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-      flex-shrink: 0;
-    }
-
-    .conn-card {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: 6px;
-      padding: 8px 12px;
+    .band-locks-inline {
       display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-    .conn-card.current {
-      border-color: rgba(46, 160, 67, 0.5);
-      background: linear-gradient(180deg, rgba(35, 134, 54, 0.1) 0%, rgba(22, 27, 34, 0.95) 100%);
-    }
-    .conn-card.prior {
-      border-color: rgba(139, 148, 158, 0.25);
-      background: rgba(22, 27, 34, 0.6);
-    }
-
-    .conn-card-header {
-      display: flex;
-      justify-content: space-between;
       align-items: center;
-      font-size: 11.5px;
-      font-weight: 700;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-      padding-bottom: 4px;
-    }
-
-    .conn-props-grid {
-      display: grid;
-      grid-template-columns: 1.2fr 1fr 1fr 0.8fr;
-      gap: 6px 10px;
-      font-size: 11.5px;
-    }
-    .prop-item span { color: var(--text-muted); font-size: 10px; display: block; }
-    .prop-item strong { color: var(--text-bright); font-family: ui-monospace, monospace; font-size: 11.5px; }
-
-    .diff-badge {
-      background: rgba(46, 160, 67, 0.2);
-      border: 1px solid rgba(46, 160, 67, 0.4);
-      color: var(--success-bright);
-      padding: 1px 6px;
+      gap: 8px;
+      font-size: 11px;
+      background: #0d1117;
+      border: 1px solid var(--card-border);
+      padding: 3px 8px;
       border-radius: 4px;
-      font-size: 10px;
-      font-weight: 600;
-      margin-left: 6px;
     }
+    .band-locks-inline label { display: flex; align-items: center; gap: 3px; cursor: pointer; color: var(--text); }
+    .band-locks-inline input { accent-color: var(--accent); }
 
     /* Main Screen Split (Fit 100vh) */
     .main-grid {
       display: grid;
-      grid-template-columns: 1fr 340px;
+      grid-template-columns: 1fr 1fr;
       gap: 8px;
       flex: 1;
       min-height: 0;
@@ -195,13 +152,13 @@
       flex-shrink: 0;
     }
 
-    /* Left Column: Tower Catalog Table */
+    /* Controls inside table panels */
     .catalog-controls {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 6px;
-      padding: 6px 10px;
+      padding: 5px 8px;
       background: #161b22;
       border-bottom: 1px solid var(--card-border);
       flex-shrink: 0;
@@ -212,7 +169,7 @@
       background: #21262d;
       border: 1px solid var(--card-border);
       color: var(--text-muted);
-      padding: 3px 8px;
+      padding: 2px 7px;
       border-radius: 4px;
       font-size: 11px;
       cursor: pointer;
@@ -227,7 +184,7 @@
       color: var(--text-bright);
       font-size: 11px;
       outline: none;
-      width: 140px;
+      width: 130px;
     }
 
     .table-container {
@@ -260,88 +217,60 @@
       padding: 5px 8px;
       border-bottom: 1px solid #21262d;
       white-space: nowrap;
+      transition: background 0.3s ease;
     }
 
     tbody tr:hover { background: #1f242c; }
-    tbody tr.active-row { background: rgba(59, 130, 246, 0.12); }
 
-    .tag-active { color: var(--success-bright); font-weight: 600; font-size: 11px; }
+    /* Smooth Row Entry Animation */
+    @keyframes rowHighlight {
+      0% { background: rgba(46, 160, 67, 0.45); transform: translateY(-2px); }
+      50% { background: rgba(46, 160, 67, 0.25); }
+      100% { background: rgba(46, 160, 67, 0.12); transform: translateY(0); }
+    }
+
+    tbody tr.current-active-row {
+      background: rgba(46, 160, 67, 0.12);
+      border-left: 3px solid var(--success-bright);
+      animation: rowHighlight 1.2s ease-out;
+    }
+
+    tbody tr.prior-row {
+      background: rgba(255, 255, 255, 0.025);
+      border-left: 3px solid #8b949e;
+    }
+
+    .tag-active { color: var(--success-bright); font-weight: 700; font-size: 11px; }
+    .tag-prior { color: var(--text-muted); font-weight: 600; font-size: 11px; }
     .tag-fresh { color: var(--accent); font-size: 11px; }
     .tag-used { color: var(--warning); font-size: 11px; }
 
-    /* Add Row Form */
-    .add-row {
+    /* Compact Metrics Strip */
+    .metrics-header-strip {
       display: grid;
-      grid-template-columns: 1.5fr 1fr 1fr 1fr auto;
-      gap: 6px;
-      padding: 6px 10px;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 4px;
+      padding: 5px 8px;
       background: #161b22;
-      border-top: 1px solid var(--card-border);
+      border-bottom: 1px solid var(--card-border);
       flex-shrink: 0;
     }
-    .add-row input, .add-row select {
+    .metric-chip {
       background: #0d1117;
       border: 1px solid var(--card-border);
       border-radius: 4px;
       padding: 3px 6px;
-      color: var(--text-bright);
-      font-size: 11px;
-      outline: none;
-    }
-
-    /* Right Column: Details & History */
-    .right-column {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      min-height: 0;
-      overflow: hidden;
-    }
-
-    .metrics-row {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 4px;
-      padding: 8px 10px;
-      background: #161b22;
-      border-bottom: 1px solid var(--card-border);
-      flex-shrink: 0;
-    }
-    .metric-box {
-      background: #0d1117;
-      border: 1px solid var(--card-border);
-      border-radius: 4px;
-      padding: 4px 6px;
       text-align: center;
     }
-    .metric-box span { font-size: 10px; color: var(--text-muted); display: block; }
-    .metric-box strong { font-size: 12px; color: var(--text-bright); font-family: monospace; }
-
-    .band-lock-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 6px 10px;
-      font-size: 11px;
-      background: #161b22;
-      border-bottom: 1px solid var(--card-border);
-      flex-shrink: 0;
-    }
-    .band-lock-row label { display: flex; align-items: center; gap: 4px; cursor: pointer; color: var(--text); }
-    .band-lock-row input { accent-color: var(--accent); }
-
-    .history-container {
-      flex: 1;
-      overflow-y: auto;
-      min-height: 0;
-    }
+    .metric-chip span { font-size: 9.5px; color: var(--text-muted); display: block; }
+    .metric-chip strong { font-size: 11.5px; color: var(--text-bright); font-family: monospace; }
 
     /* Live Scan Banner */
     .scan-banner {
       display: none;
       background: #1c2128;
       border: 1px solid var(--accent);
-      padding: 6px 10px;
+      padding: 5px 10px;
       font-size: 11px;
       gap: 6px;
       align-items: center;
@@ -358,8 +287,8 @@
       background: var(--card-bg);
       border: 1px solid var(--card-border);
       border-radius: 6px;
-      padding: 4px 10px;
-      height: 24px;
+      padding: 3px 10px;
+      height: 22px;
       font-size: 11px;
       font-family: monospace;
       color: var(--text-muted);
@@ -373,7 +302,7 @@
     <div class="header-left">
       <span>📡 ZTE K12 Mobile Controller</span>
       <span class="header-badge">Kyivstar 4G LTE</span>
-      <span class="header-badge" id="head-sim-state">Гарантована зміна IP</span>
+      <span class="header-badge" id="guarantee-status" style="color: var(--success-bright);">🛡️ Унікальність IP: Активна ✅</span>
     </div>
     <div class="header-right">
       <div style="display: flex; align-items: center; gap: 6px;">
@@ -384,7 +313,7 @@
     </div>
   </header>
 
-  <!-- Dense Top Strip: Actions -->
+  <!-- Dense Top Action Strip -->
   <div class="top-strip">
     <div class="action-buttons">
       <button class="btn-primary" id="btn-airplane" onclick="guaranteedDistinctReconnect()" title="Миттєве скидання радіосесії з гарантованою зміною IP">
@@ -401,69 +330,16 @@
       </button>
     </div>
 
-    <div style="display: flex; align-items: center; gap: 12px; font-size: 11.5px;">
-      <span id="guarantee-status" style="color: var(--success-bright); font-weight: 600;">🛡️ Контроль унікальності IP: Активний</span>
-      <div style="display: flex; align-items: center; gap: 6px;">
-        <span style="color: var(--text-muted);">Ротацій:</span>
-        <strong id="stat-rotate-count" style="color: var(--text-bright); font-family: monospace;">0</strong>
+    <div style="display: flex; align-items: center; gap: 10px;">
+      <div class="band-locks-inline">
+        <span style="color: var(--text-muted);">Bands:</span>
+        <label><input type="checkbox" id="band-b3" value="0x4" checked onchange="applyBandLock()"> B3</label>
+        <label><input type="checkbox" id="band-b8" value="0x80" checked onchange="applyBandLock()"> B8</label>
+        <label><input type="checkbox" id="band-b7" value="0x40" checked onchange="applyBandLock()"> B7</label>
+        <label><input type="checkbox" id="band-b20" value="0x80000" checked onchange="applyBandLock()"> B20</label>
       </div>
-    </div>
-  </div>
-
-  <!-- Side-by-Side: Current vs Prior Connection Properties Strip -->
-  <div class="compare-strip">
-    <!-- Current Connection -->
-    <div class="conn-card current">
-      <div class="conn-card-header">
-        <span style="color: var(--success-bright); display: flex; align-items: center;">
-          🟢 ПОТОЧНЕ ПІДКЛЮЧЕННЯ (CURRENT)
-          <span class="diff-badge" id="cur-diff-badge">НОВИЙ IP 🟢</span>
-        </span>
-        <span id="cur-time" style="font-family: monospace; font-size: 10.5px; color: var(--text-muted);">--:--:--</span>
-      </div>
-      <div class="conn-props-grid">
-        <div class="prop-item">
-          <span>Публічний IP:</span>
-          <strong id="cur-pub-ip" style="color: var(--success-bright); font-size: 12px;">--.--.--.--</strong>
-        </div>
-        <div class="prop-item">
-          <span>Локація / ISP:</span>
-          <strong id="cur-geo">🇺🇦 Київ, UA</strong>
-        </div>
-        <div class="prop-item">
-          <span>Вишка / Сота:</span>
-          <strong id="cur-band-pci">--</strong>
-        </div>
-        <div class="prop-item">
-          <span>RSRP / WAN IP:</span>
-          <strong id="cur-sig-wan">--</strong>
-        </div>
-      </div>
-    </div>
-
-    <!-- Prior Connection -->
-    <div class="conn-card prior">
-      <div class="conn-card-header">
-        <span style="color: var(--text-muted);">⚪ ПОПЕРЕДНЄ ПІДКЛЮЧЕННЯ (PRIOR)</span>
-        <span id="prior-time" style="font-family: monospace; font-size: 10.5px; color: var(--text-muted);">--:--:--</span>
-      </div>
-      <div class="conn-props-grid">
-        <div class="prop-item">
-          <span>Попередній IP:</span>
-          <strong id="prior-pub-ip" style="color: var(--text-muted); font-size: 12px;">--.--.--.--</strong>
-        </div>
-        <div class="prop-item">
-          <span>Локація / ISP:</span>
-          <strong id="prior-geo">--</strong>
-        </div>
-        <div class="prop-item">
-          <span>Вишка / Сота:</span>
-          <strong id="prior-band-pci">--</strong>
-        </div>
-        <div class="prop-item">
-          <span>RSRP / WAN IP:</span>
-          <strong id="prior-sig-wan">--</strong>
-        </div>
+      <div style="font-size: 11px; color: var(--text-muted);">
+        Ротацій: <strong id="stat-rotate-count" style="color: var(--text-bright); font-family: monospace;">0</strong>
       </div>
     </div>
   </div>
@@ -477,7 +353,7 @@
     <span id="scan-pct-text" style="font-family: monospace;">0%</span>
   </div>
 
-  <!-- Main 2-Column Full Screen Layout -->
+  <!-- Main 2-Column Full Screen Grid -->
   <div class="main-grid">
     <!-- Left Column: Master Tower Catalog (Scrollable) -->
     <div class="panel">
@@ -500,7 +376,7 @@
           <button class="tab-btn" onclick="setFilterGroup('fresh')">Свіжі (0р)</button>
           <button class="tab-btn" onclick="setFilterGroup('pool')">Пул ☑️</button>
         </div>
-        <input type="text" class="search-box" id="search-box" placeholder="Пошук..." oninput="renderTowerTable()">
+        <input type="text" class="search-box" id="search-box" placeholder="Пошук соти..." oninput="renderTowerTable()">
       </div>
 
       <!-- Table -->
@@ -525,78 +401,54 @@
           </tbody>
         </table>
       </div>
-
-      <!-- Add Sector Input Row -->
-      <div class="add-row">
-        <input type="text" id="add-name" placeholder="Назва соти (напр. Центр Сектор 1)">
-        <select id="add-band">
-          <option value="Band 3 (1800 MHz)">Band 3 (1800 MHz)</option>
-          <option value="Band 8 (900 MHz)">Band 8 (900 MHz)</option>
-          <option value="Band 7 (2600 MHz)">Band 7 (2600 MHz)</option>
-          <option value="Band 20 (800 MHz)">Band 20 (800 MHz)</option>
-        </select>
-        <input type="number" id="add-earfcn" placeholder="EARFCN (1500)">
-        <input type="number" id="add-pci" placeholder="PCI (0-503)">
-        <button class="btn-primary btn-sm" onclick="addCustomTower()">➕ Додати</button>
-      </div>
     </div>
 
-    <!-- Right Column: Details & History -->
-    <div class="right-column">
-      <!-- 1. Compact Radio Metrics & Band Locks -->
-      <div class="panel" style="flex-shrink: 0;">
-        <div class="panel-header">
-          <span>📊 Радіосигнал та Band Lock</span>
-          <span id="geo-asn-badge" style="color: var(--text-muted); font-size: 11px;">AS15895 Kyivstar</span>
+    <!-- Right Column: Direct Timeline Comparison Table (Current vs Prior vs History) -->
+    <div class="panel">
+      <div class="panel-header">
+        <span>🌐 Порівняння підключень: Поточне vs Попередні</span>
+        <button class="btn-sm" onclick="fetchGeoLocation()">🔄 Оновити Geo</button>
+      </div>
+
+      <!-- Telemetry Strip -->
+      <div class="metrics-header-strip">
+        <div class="metric-chip">
+          <span>RSRP (Сигнал)</span>
+          <strong id="val-rsrp">--</strong>
         </div>
-        <div class="metrics-row">
-          <div class="metric-box">
-            <span>RSRP</span>
-            <strong id="val-rsrp">--</strong>
-          </div>
-          <div class="metric-box">
-            <span>SINR</span>
-            <strong id="val-sinr">--</strong>
-          </div>
-          <div class="metric-box">
-            <span>RSSI</span>
-            <strong id="val-rssi">--</strong>
-          </div>
-          <div class="metric-box">
-            <span>RSRQ</span>
-            <strong id="val-rsrq">--</strong>
-          </div>
+        <div class="metric-chip">
+          <span>SINR (Якість)</span>
+          <strong id="val-sinr">--</strong>
         </div>
-        <div class="band-lock-row">
-          <label><input type="checkbox" id="band-b3" value="0x4" checked onchange="applyBandLock()"> B3</label>
-          <label><input type="checkbox" id="band-b8" value="0x80" checked onchange="applyBandLock()"> B8</label>
-          <label><input type="checkbox" id="band-b7" value="0x40" checked onchange="applyBandLock()"> B7</label>
-          <label><input type="checkbox" id="band-b20" value="0x80000" checked onchange="applyBandLock()"> B20</label>
-          <button class="btn-sm" onclick="selectAllBands(true)">Всі</button>
+        <div class="metric-chip">
+          <span>RSSI (Потужність)</span>
+          <strong id="val-rssi">--</strong>
+        </div>
+        <div class="metric-chip">
+          <span>RSRQ</span>
+          <strong id="val-rsrq">--</strong>
         </div>
       </div>
 
-      <!-- 2. IP History Log (Scrollable) -->
-      <div class="panel" style="flex: 1;">
-        <div class="panel-header">
-          <span>📜 Журнал IP-ротацій та сесій</span>
-          <button class="btn-sm" onclick="clearIpHistory()">🗑️</button>
-        </div>
-        <div class="history-container">
-          <table>
-            <thead>
-              <tr>
-                <th>Час</th>
-                <th>Отриманий IP</th>
-                <th>Локація</th>
-                <th>Band / PCI</th>
-              </tr>
-            </thead>
-            <tbody id="ip-history-body">
-              <tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 10px;">Журнал порожній.</td></tr>
-            </tbody>
-          </table>
-        </div>
+      <!-- Unified Properties Comparison Table -->
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Стан</th>
+              <th>Час</th>
+              <th>Публічний IPv4</th>
+              <th>Локація / Місто</th>
+              <th>Провайдер & ASN</th>
+              <th>Вишка (Band / PCI)</th>
+              <th>RSRP</th>
+              <th>WAN IP</th>
+            </tr>
+          </thead>
+          <tbody id="timeline-table-body">
+            <tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 16px;">Завантаження сесій...</td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -623,9 +475,6 @@
     let currentBandIndex = 0;
     let ipHistory = JSON.parse(localStorage.getItem("zte_ip_history") || "[]");
     let lastGeoData = null;
-
-    // Prior connection tracking
-    let priorConnection = JSON.parse(localStorage.getItem("zte_prior_connection") || "null");
 
     const ROTATION_BANDS = [
       { name: "Band 3 (1800 MHz)", mask: "0x0000000000000004" },
@@ -658,10 +507,9 @@
       localStorage.setItem("zte_tower_database", JSON.stringify(towerDatabase));
       localStorage.setItem("zte_rotation_count", rotationCounter.toString());
       localStorage.setItem("zte_ip_history", JSON.stringify(ipHistory));
-      if (priorConnection) localStorage.setItem("zte_prior_connection", JSON.stringify(priorConnection));
-      updateComparisonStrip();
+      document.getElementById("stat-rotate-count").innerText = rotationCounter;
       renderTowerTable();
-      renderHistory();
+      renderTimelineTable();
     }
 
     function log(msg) {
@@ -738,67 +586,94 @@
         if (data && (data.ip || data.success)) {
           lastGeoData = data;
           curPublicIp = data.ip || "--";
-          document.getElementById("geo-asn-badge").innerText = `${data.connection?.asn ? 'AS'+data.connection.asn : 'AS15895'} ${data.connection?.isp || 'Kyivstar'}`;
-          updateComparisonStrip();
+          renderTimelineTable();
           return data;
         }
       } catch (err) {}
       return null;
     }
 
-    function updateComparisonStrip() {
-      document.getElementById("stat-rotate-count").innerText = rotationCounter;
+    function renderTimelineTable() {
+      const tbody = document.getElementById("timeline-table-body");
+      if (!tbody) return;
 
-      // Update Current Connection
-      document.getElementById("cur-time").innerText = new Date().toLocaleTimeString();
-      document.getElementById("cur-pub-ip").innerText = curPublicIp || "--.--.--.--";
-      
-      const city = lastGeoData?.city || "Київ";
-      const country = lastGeoData?.country || "UA";
-      const isp = lastGeoData?.connection?.isp || "Kyivstar";
-      document.getElementById("cur-geo").innerText = `🇺🇦 ${city}, ${country} (${isp})`;
+      const currentBand = curKey ? (towerDatabase[curKey]?.band || "LTE") : "LTE";
+      const currentCity = lastGeoData?.city || "Київ";
+      const currentCountry = lastGeoData?.country || "UA";
+      const currentFlag = lastGeoData?.flag?.emoji || "🇺🇦";
+      const currentIsp = lastGeoData?.connection?.isp || "Kyivstar";
+      const currentAsn = lastGeoData?.connection?.asn ? `AS${lastGeoData.connection.asn}` : "AS15895";
+      const currentRsrp = document.getElementById("val-rsrp")?.innerText || "--";
 
-      const bandName = curKey ? (towerDatabase[curKey]?.band || "LTE") : "LTE";
-      document.getElementById("cur-band-pci").innerText = `${bandName} (PCI ${curPci || '--'})`;
+      let html = `
+        <tr class="current-active-row">
+          <td><span class="tag-active">🟢 Поточне</span></td>
+          <td style="color: var(--text-muted); font-family: monospace;">${new Date().toLocaleTimeString()}</td>
+          <td style="font-family: monospace; font-weight: 700; color: var(--success-bright);">${curPublicIp || '--.--.--.--'}</td>
+          <td>${currentFlag} ${currentCity}, ${currentCountry}</td>
+          <td style="color: var(--text-muted);">${currentIsp} (${currentAsn})</td>
+          <td><strong>${currentBand}</strong> (PCI ${curPci || '--'})</td>
+          <td>${currentRsrp} dBm</td>
+          <td style="font-family: monospace; color: var(--accent);">${curWanIp || '--'}</td>
+        </tr>
+      `;
 
-      const rsrpVal = document.getElementById("val-rsrp").innerText || "--";
-      document.getElementById("cur-sig-wan").innerText = `${rsrpVal} dBm | ${curWanIp || '--'}`;
+      if (ipHistory && ipHistory.length > 0) {
+        for (let i = 0; i < ipHistory.length && i < 25; i++) {
+          const h = ipHistory[i];
+          const isPrior = (i === 0);
+          const stateLabel = isPrior 
+            ? '<span class="tag-prior">⚪ Попереднє</span>' 
+            : `<span style="color: var(--text-muted); font-size: 11px;">#${ipHistory.length - i}</span>`;
 
-      // Update Prior Connection
-      if (priorConnection) {
-        document.getElementById("prior-time").innerText = priorConnection.time ? new Date(priorConnection.time).toLocaleTimeString() : "--:--:--";
-        document.getElementById("prior-pub-ip").innerText = priorConnection.publicIp || "--.--.--.--";
-        document.getElementById("prior-geo").innerText = priorConnection.geo || "--";
-        document.getElementById("prior-band-pci").innerText = priorConnection.bandPci || "--";
-        document.getElementById("prior-sig-wan").innerText = `${priorConnection.rsrp || '--'} dBm | ${priorConnection.wanIp || '--'}`;
-
-        // Check if IP is verified different
-        if (curPublicIp && priorConnection.publicIp && curPublicIp !== priorConnection.publicIp && priorConnection.publicIp !== "--.--.--.--") {
-          document.getElementById("cur-diff-badge").innerText = "НОВИЙ IP 🟢";
-          document.getElementById("cur-diff-badge").style.background = "rgba(46, 160, 67, 0.2)";
-          document.getElementById("cur-diff-badge").style.color = "var(--success-bright)";
+          html += `
+            <tr class="${isPrior ? 'prior-row' : ''}">
+              <td>${stateLabel}</td>
+              <td style="color: var(--text-muted); font-family: monospace;">${new Date(h.time).toLocaleTimeString()}</td>
+              <td style="font-family: monospace; color: ${isPrior ? 'var(--text-bright)' : 'var(--text-muted)'}; font-weight: ${isPrior ? '600' : 'normal'};">${h.ip}</td>
+              <td>${h.city || "Київ"}, ${h.country || "UA"}</td>
+              <td style="color: var(--text-muted);">${h.isp || "Kyivstar"}</td>
+              <td>${h.band || "LTE"} (PCI ${h.pci || '--'})</td>
+              <td>${h.rsrp ? h.rsrp + ' dBm' : '--'}</td>
+              <td style="font-family: monospace; color: var(--text-muted);">${h.wanIp || '--'}</td>
+            </tr>
+          `;
         }
-      } else {
-        document.getElementById("prior-time").innerText = "Немає даних";
-        document.getElementById("prior-pub-ip").innerText = "--.--.--.--";
-        document.getElementById("prior-geo").innerText = "--";
-        document.getElementById("prior-band-pci").innerText = "--";
-        document.getElementById("prior-sig-wan").innerText = "--";
       }
+
+      tbody.innerHTML = html;
     }
 
-    function snapshotPriorConnection() {
-      if (curWanIp || curPublicIp) {
-        priorConnection = {
-          time: Date.now(),
-          publicIp: curPublicIp || "--",
-          wanIp: curWanIp || "--",
-          geo: `${lastGeoData?.city || "Київ"}, ${lastGeoData?.country || "UA"} (${lastGeoData?.connection?.isp || "Kyivstar"})`,
-          bandPci: `${curKey ? (towerDatabase[curKey]?.band || "LTE") : "LTE"} (PCI ${curPci || '--'})`,
-          rsrp: document.getElementById("val-rsrp").innerText || "--"
-        };
-        localStorage.setItem("zte_prior_connection", JSON.stringify(priorConnection));
+    function recordCurrentToHistory() {
+      if (!curWanIp && !curPublicIp) return;
+      if (curWanIp === "--" && curPublicIp === "--") return;
+
+      const currentCity = lastGeoData?.city || "Київ";
+      const currentCountry = lastGeoData?.country || "UA";
+      const currentIsp = lastGeoData?.connection?.isp || "Kyivstar";
+      const currentBand = curKey ? (towerDatabase[curKey]?.band || "LTE") : "LTE";
+      const currentRsrp = document.getElementById("val-rsrp")?.innerText || "--";
+
+      // Prevent duplicate insertion
+      if (ipHistory.length > 0 && ipHistory[0].ip === curPublicIp && ipHistory[0].wanIp === curWanIp) {
+        return;
       }
+
+      ipHistory.unshift({
+        time: Date.now(),
+        ip: curPublicIp || curWanIp,
+        wanIp: curWanIp,
+        city: currentCity,
+        country: currentCountry,
+        isp: currentIsp,
+        band: currentBand,
+        earfcn: curEarfcn,
+        pci: curPci,
+        rsrp: currentRsrp
+      });
+
+      if (ipHistory.length > 50) ipHistory.pop();
+      saveTowerDatabase();
     }
 
     function setFilterGroup(group) {
@@ -862,7 +737,7 @@
         else badge = `<span class="tag-used">🟡 ${t.useCount}р</span>`;
 
         html += `
-          <tr class="${isActive ? 'active-row' : ''}">
+          <tr class="${isActive ? 'current-active-row' : ''}">
             <td style="text-align: center;">
               <input type="checkbox" ${isEnabled ? 'checked' : ''} onchange="toggleTowerPool('${k}', this.checked)">
             </td>
@@ -883,47 +758,6 @@
       tbody.innerHTML = html;
     }
 
-    function renderHistory() {
-      const tbody = document.getElementById("ip-history-body");
-      if (!ipHistory.length) {
-        tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 10px;">Журнал порожній.</td></tr>';
-        return;
-      }
-      let html = "";
-      for (let h of ipHistory.slice(0, 20)) {
-        html += `
-          <tr>
-            <td style="color: var(--text-muted);">${new Date(h.time).toLocaleTimeString()}</td>
-            <td style="font-family: monospace; color: var(--success-bright); font-weight: 700;">${h.ip}</td>
-            <td>${h.city || "Київ"}</td>
-            <td><code>${h.band || "B3"} / ${h.pci || "--"}</code></td>
-          </tr>
-        `;
-      }
-      tbody.innerHTML = html;
-    }
-
-    function recordIpSession(ip, band, earfcn, pci, rsrp) {
-      if (!ip || ip === "--") return;
-      if (ipHistory.length && ipHistory[0].ip === ip) return;
-
-      const city = lastGeoData?.city || "Київ";
-      const country = lastGeoData?.country || "UA";
-
-      ipHistory.unshift({
-        time: Date.now(),
-        ip: ip,
-        city: city,
-        country: country,
-        band: band,
-        earfcn: earfcn,
-        pci: pci,
-        rsrp: rsrp
-      });
-      if (ipHistory.length > 50) ipHistory.pop();
-      saveTowerDatabase();
-    }
-
     function toggleTowerPool(key, enabled) {
       if (towerDatabase[key]) {
         towerDatabase[key].enabled = enabled;
@@ -937,32 +771,6 @@
       }
       saveTowerDatabase();
       log("Пресети завантажено.");
-    }
-
-    function addCustomTower() {
-      const name = document.getElementById("add-name").value.trim() || "Сектор";
-      const band = document.getElementById("add-band").value;
-      const earfcn = document.getElementById("add-earfcn").value.trim();
-      const pci = document.getElementById("add-pci").value.trim();
-
-      if (!earfcn || !pci) return;
-      const key = `${earfcn}_${pci}`;
-      towerDatabase[key] = {
-        name: name,
-        band: band,
-        earfcn: earfcn,
-        pci: pci,
-        enabled: true,
-        useCount: 0,
-        firstSeen: Date.now(),
-        lastUsed: 0
-      };
-
-      document.getElementById("add-name").value = "";
-      document.getElementById("add-earfcn").value = "";
-      document.getElementById("add-pci").value = "";
-      saveTowerDatabase();
-      log(`[+] Додано: ${name}`);
     }
 
     async function fetchStatus() {
@@ -988,8 +796,9 @@
           const rsrq = data.lte_rsrq || "--";
           const newWanIp = data.wan_ipaddr || "";
 
+          // If WAN IP changed, archive old session
           if (curWanIp && newWanIp && curWanIp !== newWanIp) {
-            snapshotPriorConnection();
+            recordCurrentToHistory();
           }
           curWanIp = newWanIp;
 
@@ -1023,10 +832,6 @@
             if (!towerDatabase[curKey].useCount) towerDatabase[curKey].useCount = 1;
           }
 
-          if (curWanIp && data.ppp_status === "ppp_connected") {
-            recordIpSession(curWanIp, band, curEarfcn, curPci, rsrp);
-          }
-
           saveTowerDatabase();
         } else {
           dot.className = "dot";
@@ -1047,7 +852,7 @@
       gStatus.innerText = "🔄 Перевірка зміни IP...";
       gStatus.style.color = "var(--warning)";
 
-      snapshotPriorConnection();
+      recordCurrentToHistory();
       const oldWanIp = curWanIp;
       const oldPubIp = curPublicIp;
 
@@ -1058,7 +863,6 @@
         attempts++;
         log(`✈️ Скидання сесії (спроба ${attempts}/4)...`);
 
-        // Rotate band if same IP repeated
         if (attempts > 1) {
           currentBandIndex = (currentBandIndex + 1) % ROTATION_BANDS.length;
           const target = ROTATION_BANDS[currentBandIndex];
@@ -1076,7 +880,6 @@
         await new Promise(r => setTimeout(r, 1600));
         await apiPost("CONNECT_NETWORK", { notCallback: "true" });
 
-        // Wait for connection and verify new IP
         for (let i = 0; i < 8; i++) {
           await new Promise(r => setTimeout(r, 1000));
           const st = await apiGet("wan_ipaddr,ppp_status");
@@ -1087,10 +890,10 @@
 
             if (curWanIp !== oldWanIp && (!oldPubIp || newPubIp !== oldPubIp)) {
               distinct = true;
-              log(`✅ Успішно отримано НОВИЙ унікальний IP: ${newPubIp} (WAN: ${curWanIp})`);
+              log(`✅ Успішно отримано НОВИЙ унікальний IP: ${newPubIp}`);
               break;
             } else if (attempts === 1 && curWanIp === oldWanIp) {
-              log(`⚠️ Отримано той самий IP (${curWanIp}), ротуємо діапазон для гарантованої зміни...`);
+              log(`⚠️ Той самий IP (${curWanIp}), ротуємо діапазон...`);
               break;
             }
           }
@@ -1102,7 +905,7 @@
       fetchStatus();
       await fetchGeoLocation();
 
-      gStatus.innerText = "🛡️ Контроль унікальності IP: Підтверджено ✅";
+      gStatus.innerText = "🛡️ Унікальність IP: Підтверджено ✅";
       gStatus.style.color = "var(--success-bright)";
 
       btn.disabled = false;
@@ -1118,7 +921,7 @@
       gStatus.innerText = "🔄 Перевірка зміни IP...";
       gStatus.style.color = "var(--warning)";
 
-      snapshotPriorConnection();
+      recordCurrentToHistory();
       const oldWanIp = curWanIp;
       const oldPubIp = curPublicIp;
 
@@ -1153,7 +956,7 @@
 
             if (curWanIp !== oldWanIp && (!oldPubIp || newPubIp !== oldPubIp)) {
               distinct = true;
-              log(`✅ Перемкнуто на ${target.name}! Новий унікальний IP: ${newPubIp}`);
+              log(`✅ Перемкнуто на ${target.name}! Новий IP: ${newPubIp}`);
               break;
             }
           }
@@ -1165,7 +968,7 @@
       fetchStatus();
       await fetchGeoLocation();
 
-      gStatus.innerText = "🛡️ Контроль унікальності IP: Підтверджено ✅";
+      gStatus.innerText = "🛡️ Унікальність IP: Підтверджено ✅";
       gStatus.style.color = "var(--success-bright)";
 
       btn.disabled = false;
@@ -1175,7 +978,7 @@
     async function connectToTowerSafely(earfcn, pci) {
       log(`⚡ Сота: EARFCN=${earfcn}, PCI=${pci}...`);
 
-      snapshotPriorConnection();
+      recordCurrentToHistory();
 
       await apiPost("LTE_LOCK_CELL_SET", { lte_earfcn_lock: earfcn, lte_pci_lock: pci });
       await apiPost("DISCONNECT_NETWORK", { notCallback: "true" });
@@ -1275,14 +1078,6 @@
         towerDatabase = {};
         rotationCounter = 0;
         saveTowerDatabase();
-      }
-    }
-
-    function clearIpHistory() {
-      if (confirm("Очистити журнал IP?")) {
-        ipHistory = [];
-        localStorage.setItem("zte_ip_history", "[]");
-        renderHistory();
       }
     }
 
