@@ -1,5 +1,5 @@
 # ==============================================================================
-#  ZTE K12 1-Click IP Rotator & System Toast Notification
+#  ZTE K12 1-Click IP Rotator & System Toast Notification (Pure PowerShell)
 # ==============================================================================
 $ErrorActionPreference = "SilentlyContinue"
 
@@ -14,15 +14,14 @@ try {
     $resp = Invoke-RestMethod -Uri "http://127.0.0.1:8080/api/reconnect" -TimeoutSec 6
     if ($resp.status -eq "success") { $Rotated = $true }
 } catch {
-    # Fallback to direct binary call
-    & "$InstallDir\zte-control.exe" reconnect
+    Start-Process "$InstallDir\zte-control.exe" -ArgumentList "reconnect" -Wait -WindowStyle Hidden
     $Rotated = $true
 }
 
 Start-Sleep -Seconds 3
 
 # 2. Query status & new public IP
-$NewIp = "Невідомо"
+$NewIp = "--"
 $City = "Київ"
 $Country = "UA"
 $Isp = "Kyivstar"
@@ -35,6 +34,7 @@ try {
     if ($geo.ip) {
         $NewIp = $geo.ip
         if ($geo.city) { $City = $geo.city }
+        if ($geo.country_code) { $Country = $geo.country_code }
         if ($geo.connection.isp) { $Isp = $geo.connection.isp }
     }
 } catch {}
@@ -47,6 +47,7 @@ try {
 } catch {}
 
 # 3. Show Native Windows Toast Notification
+$toastShown = $false
 try {
     [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
     [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
@@ -66,13 +67,19 @@ try {
     $xml.LoadXml($template)
     $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
     [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("ZTE K12 IP Rotator").Show($toast)
-} catch {
-    # Fallback balloon notification
-    Add-Type -AssemblyName System.Windows.Forms
-    $notify = New-Object System.Windows.Forms.NotifyIcon
-    $notify.Icon = [System.Drawing.SystemIcons]::Information
-    $notify.BalloonTipTitle = "📡 ZTE K12: Новий IP отримано!"
-    $notify.BalloonTipText = "IP: $NewIp ($City) | $Band (PCI $Pci)"
-    $notify.Visible = $true
-    $notify.ShowBalloonTip(4000)
+    $toastShown = $true
+} catch {}
+
+if (-not $toastShown) {
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        $notify = New-Object System.Windows.Forms.NotifyIcon
+        $notify.Icon = [System.Drawing.SystemIcons]::Information
+        $notify.BalloonTipTitle = "📡 ZTE K12: Новий IP отримано! ✅"
+        $notify.BalloonTipText = "IP: $NewIp ($City, $Isp) | $Band (PCI $Pci)"
+        $notify.Visible = $true
+        $notify.ShowBalloonTip(4000)
+        Start-Sleep -Seconds 4
+        $notify.Dispose()
+    } catch {}
 }
