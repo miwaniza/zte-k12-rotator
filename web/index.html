@@ -37,7 +37,7 @@
 
     .container {
       width: 100%;
-      max-width: 950px;
+      max-width: 980px;
       display: flex;
       flex-direction: column;
       gap: 20px;
@@ -87,7 +87,7 @@
 
     .grid-2 {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
       gap: 20px;
     }
 
@@ -110,6 +110,44 @@
       padding-bottom: 12px;
     }
     .card-header h2 { font-size: 1rem; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+
+    .tower-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+    .tower-table th {
+      text-align: left;
+      padding: 8px 10px;
+      color: var(--text-muted);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      font-weight: 500;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+    }
+    .tower-table td {
+      padding: 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .tower-row:hover { background: rgba(255, 255, 255, 0.03); }
+
+    .tag-primary {
+      background: rgba(88, 166, 255, 0.15);
+      color: var(--accent);
+      padding: 3px 8px;
+      border-radius: 12px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+
+    .tag-scan {
+      background: rgba(210, 153, 34, 0.15);
+      color: var(--warning);
+      padding: 3px 8px;
+      border-radius: 12px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
 
     .metrics-grid {
       display: grid;
@@ -153,35 +191,6 @@
     .band-chip input { accent-color: var(--accent); width: 18px; height: 18px; }
     .band-chip-label strong { display: block; font-size: 0.85rem; }
     .band-chip-label span { font-size: 0.75rem; color: var(--text-muted); }
-
-    .tower-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.85rem;
-    }
-    .tower-table th {
-      text-align: left;
-      padding: 8px 10px;
-      color: var(--text-muted);
-      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-      font-weight: 500;
-      font-size: 0.75rem;
-      text-transform: uppercase;
-    }
-    .tower-table td {
-      padding: 10px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-    }
-    .tower-row:hover { background: rgba(255, 255, 255, 0.03); }
-
-    .tag-primary {
-      background: rgba(88, 166, 255, 0.15);
-      color: var(--accent);
-      padding: 3px 8px;
-      border-radius: 12px;
-      font-size: 0.75rem;
-      font-weight: 600;
-    }
 
     .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .form-group { display: flex; flex-direction: column; gap: 6px; }
@@ -258,15 +267,18 @@
     <!-- Cell Towers / Sectors Table -->
     <section class="card">
       <div class="card-header">
-        <h2>🗼 Список вишок та секторів (Cell Towers & Sectors)</h2>
-        <button class="btn-secondary btn-sm" onclick="fetchStatus()">🔄 Оновити список</button>
+        <h2>🗼 Доступні вишки та сектори (Cell Towers & Sectors)</h2>
+        <div style="display: flex; gap: 8px;">
+          <button id="btn-scan-all" class="btn-sm" style="background: linear-gradient(135deg, #1f6feb, #238636);" onclick="scanAllBands()">📡 Сканувати всі вишки (B3, B7, B8, B20)</button>
+          <button class="btn-secondary btn-sm" onclick="fetchStatus()">🔄 Оновити</button>
+        </div>
       </div>
       <table class="tower-table">
         <thead>
           <tr>
-            <th>Статус / Тип</th>
-            <th>Оператор / Band</th>
-            <th>EARFCN (Частота)</th>
+            <th>Тип</th>
+            <th>Діапазон / Частота</th>
+            <th>EARFCN</th>
             <th>PCI</th>
             <th>Cell ID / eNodeB</th>
             <th>Сигнал (RSRP / SINR)</th>
@@ -274,14 +286,14 @@
           </tr>
         </thead>
         <tbody id="tower-table-body">
-          <tr class="tower-row">
-            <td><span class="tag-primary">Активна сота (PCC)</span></td>
+          <tr class="tower-row" id="row-serving">
+            <td><span class="tag-primary">Активна (PCC)</span></td>
             <td id="t-band">LTE BAND 8 (900 MHz)</td>
             <td id="t-earfcn">3575</td>
             <td id="t-pci">11</td>
             <td id="t-cellid">4e58916 (eNodeB: 320905)</td>
             <td id="t-signal">-82 dBm | 5.0 dB</td>
-            <td><button class="btn-secondary btn-sm" onclick="quickLockServing()">🔒 Зафіксувати</button></td>
+            <td><button class="btn-secondary btn-sm" onclick="quickLock('3575', '11')">🔒 Залочити</button></td>
           </tr>
         </tbody>
       </table>
@@ -411,6 +423,8 @@
 
     let curEarfcn = "3575";
     let curPci = "11";
+    let discoveredTowers = {};
+    let isScanning = false;
 
     function log(msg) {
       document.getElementById("log-toast").innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
@@ -461,7 +475,29 @@
       }
     }
 
+    function renderTowers() {
+      const tbody = document.getElementById("tower-table-body");
+      let html = "";
+
+      for (const [key, t] of Object.entries(discoveredTowers)) {
+        const tag = t.isServing ? '<span class="tag-primary">Активна (PCC)</span>' : '<span class="tag-scan">Виявлена</span>';
+        html += `
+          <tr class="tower-row">
+            <td>${tag}</td>
+            <td><strong>${t.band}</strong></td>
+            <td>${t.earfcn}</td>
+            <td>${t.pci}</td>
+            <td>${t.cellId}</td>
+            <td>${t.signal}</td>
+            <td><button class="btn-secondary btn-sm" onclick="quickLock('${t.earfcn}', '${t.pci}')">🔒 Залочити</button></td>
+          </tr>
+        `;
+      }
+      if (html) tbody.innerHTML = html;
+    }
+
     async function fetchStatus() {
+      if (isScanning) return;
       try {
         const keys = "wa_inner_version,hardware_version,network_provider,network_type,network_lte_rsrp,lte_rsrp,lte_rsrq,lte_snr,network_sinr,lte_rssi,lte_band_lock,wan_active_band,wan_active_channel,lte_pci,cell_id,network_cell_id,loginfo,ppp_status,lte_multi_ca_scell_info,lte_multi_ca_scell_sig_info";
         let data = await apiGet(keys);
@@ -488,7 +524,7 @@
           document.getElementById("val-rsrq").innerText = rsrq !== "--" ? `${rsrq} dB` : "--";
           document.getElementById("val-op").innerText = `${data.network_provider || "Kyivstar"} (${data.network_type || "LTE"})`;
 
-          // Active Tower Table update
+          // Active Tower update
           const band = data.wan_active_band || "LTE BAND 8";
           curEarfcn = data.wan_active_channel || "3575";
           curPci = data.lte_pci || "11";
@@ -499,13 +535,21 @@
             enodeb = ` (eNodeB: ${Math.floor(dec / 256)}, Sector: ${dec % 256})`;
           } catch(e){}
 
-          document.getElementById("t-band").innerText = band;
-          document.getElementById("t-earfcn").innerText = curEarfcn;
-          document.getElementById("t-pci").innerText = curPci;
-          document.getElementById("t-cellid").innerText = `${rawCell}${enodeb}`;
-          document.getElementById("t-signal").innerText = `${rsrp} dBm | ${sinr} dB`;
+          // Mark previous as non-serving
+          for (let k in discoveredTowers) discoveredTowers[k].isServing = false;
 
-          // Fill inputs
+          const key = `${curEarfcn}_${curPci}`;
+          discoveredTowers[key] = {
+            isServing: true,
+            band: band,
+            earfcn: curEarfcn,
+            pci: curPci,
+            cellId: `${rawCell}${enodeb}`,
+            signal: `${rsrp} dBm | ${sinr} dB`
+          };
+
+          renderTowers();
+
           if (!document.getElementById("cell-earfcn").value) {
             document.getElementById("cell-earfcn").value = curEarfcn;
             document.getElementById("cell-pci").value = curPci;
@@ -519,13 +563,84 @@
       } catch (err) {
         document.getElementById("status-dot").className = "dot";
         document.getElementById("status-text").innerText = "Помилка зв'язку";
-        log(`Помилка: ${err.message}`);
       }
     }
 
-    function quickLockServing() {
-      document.getElementById("cell-earfcn").value = curEarfcn;
-      document.getElementById("cell-pci").value = curPci;
+    async function scanAllBands() {
+      if (isScanning) return;
+      isScanning = true;
+      const btn = document.getElementById("btn-scan-all");
+      btn.disabled = true;
+
+      const bandsToScan = [
+        { name: "Band 3 (1800 MHz)", mask: "0x0000000000000004" },
+        { name: "Band 7 (2600 MHz)", mask: "0x0000000000000040" },
+        { name: "Band 8 (900 MHz)",  mask: "0x0000000000000080" },
+        { name: "Band 20 (800 MHz)", mask: "0x0000000000080000" }
+      ];
+
+      for (let b of bandsToScan) {
+        log(`📡 Сканування ${b.name}... перемикання частоти...`);
+        btn.innerText = `⏳ Сканування ${b.name}...`;
+
+        await apiPost("BAND_SELECT", {
+          is_gw_band: "0",
+          gw_band_mask: "0",
+          is_lte_band: "1",
+          lte_band_mask: b.mask
+        });
+
+        // Wait for baseband attachment
+        await new Promise(r => setTimeout(r, 2200));
+
+        const keys = "wan_active_band,wan_active_channel,lte_pci,cell_id,network_cell_id,network_lte_rsrp,lte_rsrp,network_sinr,lte_snr";
+        const st = await apiGet(keys);
+        const earfcn = st.wan_active_channel;
+        const pci = st.lte_pci;
+
+        if (earfcn && pci) {
+          const rawCell = st.cell_id || st.network_cell_id || "--";
+          let enodeb = "";
+          try {
+            const dec = parseInt(rawCell, 16);
+            enodeb = ` (eNodeB: ${Math.floor(dec / 256)}, Sector: ${dec % 256})`;
+          } catch(e){}
+
+          const rsrp = st.lte_rsrp || st.network_lte_rsrp || "--";
+          const sinr = st.lte_snr || st.network_sinr || "--";
+
+          const key = `${earfcn}_${pci}`;
+          discoveredTowers[key] = {
+            isServing: false,
+            band: st.wan_active_band || b.name,
+            earfcn: earfcn,
+            pci: pci,
+            cellId: `${rawCell}${enodeb}`,
+            signal: `${rsrp} dBm | ${sinr} dB`
+          };
+          renderTowers();
+          log(`[+] Знайдено соту на ${b.name}: EARFCN=${earfcn}, PCI=${pci}, RSRP=${rsrp} dBm`);
+        }
+      }
+
+      log("Відновлення всіх діапазонів (ALL)...");
+      await apiPost("BAND_SELECT", {
+        is_gw_band: "0",
+        gw_band_mask: "0",
+        is_lte_band: "1",
+        lte_band_mask: "0x00000000000800c4"
+      });
+
+      isScanning = false;
+      btn.disabled = false;
+      btn.innerText = "📡 Сканувати всі вишки (B3, B7, B8, B20)";
+      log("✅ Сканування завершено! Усі виявлені вишки додані в таблицю.");
+      setTimeout(fetchStatus, 1500);
+    }
+
+    function quickLock(earfcn, pci) {
+      document.getElementById("cell-earfcn").value = earfcn;
+      document.getElementById("cell-pci").value = pci;
       applyCellLock();
     }
 
