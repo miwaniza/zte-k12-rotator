@@ -67,7 +67,7 @@
     .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); display: inline-block; }
     .dot.online { background: var(--success-bright); box-shadow: 0 0 6px var(--success-bright); }
 
-    /* Dense Control & Stats Strip */
+    /* Dense Control Strip */
     .top-strip {
       display: flex;
       flex-wrap: wrap;
@@ -106,18 +106,50 @@
     button.btn-purple:hover { background: #8957e5; }
     button.btn-sm { padding: 3px 8px; font-size: 11px; }
 
-    .stats-inline { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-    .stat-tag {
-      background: #0d1117;
-      border: 1px solid var(--card-border);
-      padding: 3px 8px;
-      border-radius: 4px;
-      display: flex;
-      align-items: center;
-      gap: 5px;
+    /* Current vs Prior Connection Comparison Banner */
+    .compare-strip {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      flex-shrink: 0;
     }
-    .stat-tag span { color: var(--text-muted); font-size: 11px; }
-    .stat-tag strong { color: var(--text-bright); font-family: ui-monospace, SFMono-Regular, monospace; }
+
+    .conn-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      padding: 8px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .conn-card.current {
+      border-color: rgba(46, 160, 67, 0.4);
+      background: linear-gradient(180deg, rgba(35, 134, 54, 0.08) 0%, rgba(22, 27, 34, 0.95) 100%);
+    }
+    .conn-card.prior {
+      border-color: rgba(139, 148, 158, 0.25);
+      background: rgba(22, 27, 34, 0.6);
+    }
+
+    .conn-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11.5px;
+      font-weight: 700;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      padding-bottom: 4px;
+    }
+
+    .conn-props-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr 1fr 0.8fr;
+      gap: 6px 10px;
+      font-size: 11.5px;
+    }
+    .prop-item span { color: var(--text-muted); font-size: 10px; display: block; }
+    .prop-item strong { color: var(--text-bright); font-family: ui-monospace, monospace; font-size: 11.5px; }
 
     /* Main Screen Split (Fit 100vh) */
     .main-grid {
@@ -152,7 +184,7 @@
       flex-shrink: 0;
     }
 
-    /* Left Column: Tower Catalog Table & Scan */
+    /* Left Column: Tower Catalog Table */
     .catalog-controls {
       display: flex;
       align-items: center;
@@ -246,7 +278,7 @@
       outline: none;
     }
 
-    /* Right Column: Geo-IP, Telemetry & History */
+    /* Right Column: Details & History */
     .right-column {
       display: flex;
       flex-direction: column;
@@ -264,26 +296,6 @@
       flex-shrink: 0;
     }
 
-    .geo-ip-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      background: #0d1117;
-      border: 1px solid var(--card-border);
-      border-radius: 4px;
-      padding: 5px 8px;
-    }
-    .ip-val { font-family: monospace; font-size: 13px; font-weight: 700; color: var(--accent); }
-
-    .geo-details-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 4px 8px;
-    }
-    .geo-cell span { color: var(--text-muted); font-size: 10.5px; display: block; }
-    .geo-cell strong { color: var(--text-bright); font-size: 11.5px; }
-
-    /* Radio Metrics Grid */
     .metrics-row {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
@@ -303,7 +315,6 @@
     .metric-box span { font-size: 10px; color: var(--text-muted); display: block; }
     .metric-box strong { font-size: 12px; color: var(--text-bright); font-family: monospace; }
 
-    /* Band Locks row */
     .band-lock-row {
       display: flex;
       align-items: center;
@@ -317,7 +328,6 @@
     .band-lock-row label { display: flex; align-items: center; gap: 4px; cursor: pointer; color: var(--text); }
     .band-lock-row input { accent-color: var(--accent); }
 
-    /* History Log (Scrollable) */
     .history-container {
       flex: 1;
       overflow-y: auto;
@@ -372,7 +382,7 @@
     </div>
   </header>
 
-  <!-- Dense Top Strip: Actions & Primary Stats -->
+  <!-- Dense Top Strip: Actions -->
   <div class="top-strip">
     <div class="action-buttons">
       <button class="btn-primary" id="btn-airplane" onclick="triggerAirplaneReconnect()" title="Миттєве скидання радіосесії та новий IP">
@@ -389,21 +399,63 @@
       </button>
     </div>
 
-    <div class="stats-inline">
-      <div class="stat-tag">
-        <span>WAN:</span> <strong id="stat-wan-ip" style="color: var(--accent);">--</strong>
+    <div style="display: flex; align-items: center; gap: 8px; font-size: 11.5px;">
+      <span style="color: var(--text-muted);">Всього ротацій:</span>
+      <strong id="stat-rotate-count" style="color: var(--text-bright); font-family: monospace;">0</strong>
+    </div>
+  </div>
+
+  <!-- Side-by-Side: Current vs Prior Connection Properties Strip -->
+  <div class="compare-strip">
+    <!-- Current Connection -->
+    <div class="conn-card current">
+      <div class="conn-card-header">
+        <span style="color: var(--success-bright);">🟢 ПОТОЧНЕ ПІДКЛЮЧЕННЯ (CURRENT)</span>
+        <span id="cur-time" style="font-family: monospace; font-size: 10.5px; color: var(--text-muted);">--:--:--</span>
       </div>
-      <div class="stat-tag">
-        <span>Публічний IP:</span> <strong id="stat-pub-ip" style="color: var(--success-bright);">--</strong>
+      <div class="conn-props-grid">
+        <div class="prop-item">
+          <span>Публічний IP:</span>
+          <strong id="cur-pub-ip" style="color: var(--success-bright); font-size: 12px;">--.--.--.--</strong>
+        </div>
+        <div class="prop-item">
+          <span>Локація / ISP:</span>
+          <strong id="cur-geo">🇺🇦 Київ, UA</strong>
+        </div>
+        <div class="prop-item">
+          <span>Вишка / Сота:</span>
+          <strong id="cur-band-pci">--</strong>
+        </div>
+        <div class="prop-item">
+          <span>RSRP / WAN IP:</span>
+          <strong id="cur-sig-wan">--</strong>
+        </div>
       </div>
-      <div class="stat-tag">
-        <span>Вишка:</span> <strong id="stat-cur-band">--</strong>
+    </div>
+
+    <!-- Prior Connection -->
+    <div class="conn-card prior">
+      <div class="conn-card-header">
+        <span style="color: var(--text-muted);">⚪ ПОПЕРЕДНЄ ПІДКЛЮЧЕННЯ (PRIOR)</span>
+        <span id="prior-time" style="font-family: monospace; font-size: 10.5px; color: var(--text-muted);">--:--:--</span>
       </div>
-      <div class="stat-tag">
-        <span>EARFCN/PCI:</span> <strong id="stat-cur-pci">--</strong>
-      </div>
-      <div class="stat-tag">
-        <span>Ротацій:</span> <strong id="stat-rotate-count">0</strong>
+      <div class="conn-props-grid">
+        <div class="prop-item">
+          <span>Попередній IP:</span>
+          <strong id="prior-pub-ip" style="color: var(--text-muted); font-size: 12px;">--.--.--.--</strong>
+        </div>
+        <div class="prop-item">
+          <span>Локація / ISP:</span>
+          <strong id="prior-geo">--</strong>
+        </div>
+        <div class="prop-item">
+          <span>Вишка / Сота:</span>
+          <strong id="prior-band-pci">--</strong>
+        </div>
+        <div class="prop-item">
+          <span>RSRP / WAN IP:</span>
+          <strong id="prior-sig-wan">--</strong>
+        </div>
       </div>
     </div>
   </div>
@@ -481,47 +533,13 @@
       </div>
     </div>
 
-    <!-- Right Column: Geo-IP, Radio Telemetry & History -->
+    <!-- Right Column: Telemetry, Geo & History -->
     <div class="right-column">
-      <!-- 1. Compact Geo-IP Card -->
-      <div class="panel" style="flex-shrink: 0;">
-        <div class="panel-header">
-          <span>🌍 Публічний IP та Геолокація</span>
-          <button class="btn-sm" onclick="fetchGeoLocation()">🔄</button>
-        </div>
-        <div class="geo-panel-content">
-          <div class="geo-ip-row">
-            <div>
-              <span style="font-size: 10px; color: var(--text-muted); display: block;">Публічний IPv4</span>
-              <span class="ip-val" id="geo-public-ip">--.--.--.--</span>
-            </div>
-            <button class="btn-sm" onclick="copyPublicIp()">📋 Копіювати</button>
-          </div>
-          <div class="geo-details-grid">
-            <div class="geo-cell">
-              <span>Локація:</span>
-              <strong id="geo-loc">🇺🇦 Україна, Київ</strong>
-            </div>
-            <div class="geo-cell">
-              <span>Провайдер / ASN:</span>
-              <strong id="geo-isp">Kyivstar (AS15895)</strong>
-            </div>
-            <div class="geo-cell">
-              <span>Координати:</span>
-              <strong><span id="geo-coords">--</span> <a id="geo-map-link" href="#" target="_blank" style="color: var(--accent); text-decoration: underline; display: none;">[карта]</a></strong>
-            </div>
-            <div class="geo-cell">
-              <span>Часовий пояс:</span>
-              <strong id="geo-tz">Europe/Kyiv</strong>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- 2. Compact Radio Metrics & Band Locks -->
+      <!-- 1. Compact Radio Metrics & Band Locks -->
       <div class="panel" style="flex-shrink: 0;">
         <div class="panel-header">
           <span>📊 Радіосигнал та Band Lock</span>
+          <span id="geo-asn-badge" style="color: var(--text-muted); font-size: 11px;">AS15895 Kyivstar</span>
         </div>
         <div class="metrics-row">
           <div class="metric-box">
@@ -550,10 +568,10 @@
         </div>
       </div>
 
-      <!-- 3. IP History Log (Scrollable) -->
+      <!-- 2. IP History Log (Scrollable) -->
       <div class="panel" style="flex: 1;">
         <div class="panel-header">
-          <span>📜 Журнал IP-ротацій</span>
+          <span>📜 Журнал IP-ротацій та сесій</span>
           <button class="btn-sm" onclick="clearIpHistory()">🗑️</button>
         </div>
         <div class="history-container">
@@ -590,12 +608,16 @@
     let curPci = "";
     let curWanIp = "";
     let curKey = "";
+    let curPublicIp = "";
     let rotationCounter = parseInt(localStorage.getItem("zte_rotation_count") || "0");
     let isScanning = false;
     let currentFilterGroup = "all";
     let currentBandIndex = 0;
     let ipHistory = JSON.parse(localStorage.getItem("zte_ip_history") || "[]");
     let lastGeoData = null;
+
+    // Prior connection tracking
+    let priorConnection = JSON.parse(localStorage.getItem("zte_prior_connection") || "null");
 
     const ROTATION_BANDS = [
       { name: "Band 3 (1800 MHz)", mask: "0x0000000000000004" },
@@ -628,7 +650,8 @@
       localStorage.setItem("zte_tower_database", JSON.stringify(towerDatabase));
       localStorage.setItem("zte_rotation_count", rotationCounter.toString());
       localStorage.setItem("zte_ip_history", JSON.stringify(ipHistory));
-      updateStats();
+      if (priorConnection) localStorage.setItem("zte_prior_connection", JSON.stringify(priorConnection));
+      updateComparisonStrip();
       renderTowerTable();
       renderHistory();
     }
@@ -706,39 +729,58 @@
 
         if (data && (data.ip || data.success)) {
           lastGeoData = data;
-          const ip = data.ip || "--";
-          const country = data.country || "Україна";
-          const flag = data.flag?.emoji || "🇺🇦";
-          const city = data.city || "--";
-          const isp = data.connection?.isp || data.isp || "Kyivstar PJSC";
-          const asn = data.connection?.asn ? `AS${data.connection.asn}` : (data.asn || "AS15895");
-          const lat = data.latitude || data.lat;
-          const lon = data.longitude || data.lon;
-          const tz = data.timezone?.id || data.timezone || "Europe/Kyiv";
-
-          document.getElementById("geo-public-ip").innerText = ip;
-          document.getElementById("stat-pub-ip").innerText = ip;
-          document.getElementById("geo-loc").innerText = `${flag} ${country}, ${city}`;
-          document.getElementById("geo-isp").innerText = `${isp} (${asn})`;
-          document.getElementById("geo-tz").innerText = tz;
-
-          if (lat && lon) {
-            document.getElementById("geo-coords").innerText = `${lat.toFixed(3)}, ${lon.toFixed(3)}`;
-            const mapLink = document.getElementById("geo-map-link");
-            mapLink.href = `https://www.google.com/maps?q=${lat},${lon}`;
-            mapLink.style.display = "inline";
-          }
-          log(`Geo: ${ip} (${city}, ${country})`);
+          curPublicIp = data.ip || "--";
+          document.getElementById("geo-asn-badge").innerText = `${data.connection?.asn ? 'AS'+data.connection.asn : 'AS15895'} ${data.connection?.isp || 'Kyivstar'}`;
+          updateComparisonStrip();
         }
       } catch (err) {}
     }
 
-    function copyPublicIp() {
-      const ip = document.getElementById("geo-public-ip").innerText;
-      if (ip && ip !== "--.--.--.--") {
-        navigator.clipboard.writeText(ip).then(() => {
-          log(`📋 IP скопійовано: ${ip}`);
-        });
+    function updateComparisonStrip() {
+      document.getElementById("stat-rotate-count").innerText = rotationCounter;
+
+      // Update Current Connection
+      document.getElementById("cur-time").innerText = new Date().toLocaleTimeString();
+      document.getElementById("cur-pub-ip").innerText = curPublicIp || "--.--.--.--";
+      
+      const city = lastGeoData?.city || "Київ";
+      const country = lastGeoData?.country || "UA";
+      const isp = lastGeoData?.connection?.isp || "Kyivstar";
+      document.getElementById("cur-geo").innerText = `🇺🇦 ${city}, ${country} (${isp})`;
+
+      const bandName = curKey ? (towerDatabase[curKey]?.band || "LTE") : "LTE";
+      document.getElementById("cur-band-pci").innerText = `${bandName} (PCI ${curPci || '--'})`;
+
+      const rsrpVal = document.getElementById("val-rsrp").innerText || "--";
+      document.getElementById("cur-sig-wan").innerText = `${rsrpVal} dBm | ${curWanIp || '--'}`;
+
+      // Update Prior Connection
+      if (priorConnection) {
+        document.getElementById("prior-time").innerText = priorConnection.time ? new Date(priorConnection.time).toLocaleTimeString() : "--:--:--";
+        document.getElementById("prior-pub-ip").innerText = priorConnection.publicIp || "--.--.--.--";
+        document.getElementById("prior-geo").innerText = priorConnection.geo || "--";
+        document.getElementById("prior-band-pci").innerText = priorConnection.bandPci || "--";
+        document.getElementById("prior-sig-wan").innerText = `${priorConnection.rsrp || '--'} dBm | ${priorConnection.wanIp || '--'}`;
+      } else {
+        document.getElementById("prior-time").innerText = "Немає даних";
+        document.getElementById("prior-pub-ip").innerText = "--.--.--.--";
+        document.getElementById("prior-geo").innerText = "--";
+        document.getElementById("prior-band-pci").innerText = "--";
+        document.getElementById("prior-sig-wan").innerText = "--";
+      }
+    }
+
+    function snapshotPriorConnection() {
+      if (curWanIp || curPublicIp) {
+        priorConnection = {
+          time: Date.now(),
+          publicIp: curPublicIp || "--",
+          wanIp: curWanIp || "--",
+          geo: `${lastGeoData?.city || "Київ"}, ${lastGeoData?.country || "UA"} (${lastGeoData?.connection?.isp || "Kyivstar"})`,
+          bandPci: `${curKey ? (towerDatabase[curKey]?.band || "LTE") : "LTE"} (PCI ${curPci || '--'})`,
+          rsrp: document.getElementById("val-rsrp").innerText || "--"
+        };
+        localStorage.setItem("zte_prior_connection", JSON.stringify(priorConnection));
       }
     }
 
@@ -747,13 +789,6 @@
       document.querySelectorAll("#group-tabs .tab-btn").forEach(btn => btn.classList.remove("active"));
       event.target.classList.add("active");
       renderTowerTable();
-    }
-
-    function updateStats() {
-      document.getElementById("stat-rotate-count").innerText = rotationCounter;
-      document.getElementById("stat-cur-band").innerText = curKey ? (towerDatabase[curKey]?.band || "LTE") : "--";
-      document.getElementById("stat-cur-pci").innerText = curEarfcn ? `${curEarfcn} / ${curPci}` : "--";
-      document.getElementById("stat-wan-ip").innerText = curWanIp || "--";
     }
 
     function renderTowerTable() {
@@ -934,7 +969,13 @@
           const sinr = data.lte_snr || data.network_sinr || "--";
           const rssi = data.lte_rssi || "--";
           const rsrq = data.lte_rsrq || "--";
-          curWanIp = data.wan_ipaddr || "";
+          const newWanIp = data.wan_ipaddr || "";
+
+          // If WAN IP changed, take snapshot of previous connection!
+          if (curWanIp && newWanIp && curWanIp !== newWanIp) {
+            snapshotPriorConnection();
+          }
+          curWanIp = newWanIp;
 
           document.getElementById("val-rsrp").innerText = rsrp !== "--" ? `${rsrp}` : "--";
           document.getElementById("val-sinr").innerText = sinr !== "--" ? `${sinr}` : "--";
@@ -987,6 +1028,8 @@
       btn.innerText = "⏳ Airplane...";
       log("✈️ Airplane Reconnect: Відключення сесії...");
 
+      snapshotPriorConnection();
+
       await apiPost("LTE_LOCK_CELL_SET", { lte_earfcn_lock: "0", lte_pci_lock: "0" });
       await apiPost("DISCONNECT_NETWORK", { notCallback: "true" });
       await new Promise(r => setTimeout(r, 1400));
@@ -1014,6 +1057,8 @@
       const btn = document.getElementById("btn-rotate-next");
       btn.disabled = true;
       btn.innerText = "⏳ Ротація...";
+
+      snapshotPriorConnection();
 
       currentBandIndex = (currentBandIndex + 1) % ROTATION_BANDS.length;
       const target = ROTATION_BANDS[currentBandIndex];
@@ -1044,6 +1089,8 @@
 
     async function connectToTowerSafely(earfcn, pci) {
       log(`⚡ Сота: EARFCN=${earfcn}, PCI=${pci}...`);
+
+      snapshotPriorConnection();
 
       await apiPost("LTE_LOCK_CELL_SET", { lte_earfcn_lock: earfcn, lte_pci_lock: pci });
       await apiPost("DISCONNECT_NETWORK", { notCallback: "true" });
