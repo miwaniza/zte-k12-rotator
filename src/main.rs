@@ -2,10 +2,12 @@ use clap::{Parser, Subcommand};
 use reqwest::blocking::Client;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::io::Read;
 use std::net::IpAddr;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use tiny_http::{Header, Response, Server};
+use tiny_http::{Header, Method, Response, Server};
 
 const EMBEDDED_UI_HTML: &str = include_str!("../web/index.html");
 
@@ -18,7 +20,7 @@ pub struct Cli {
     #[arg(short, long, default_value = "353FALM5", help = "WebUI admin password")]
     pub password: String,
 
-    #[arg(long, help = "Optional source IP to bind to (e.g. 192.168.0.56 when multiple routers share 192.168.0.1)")]
+    #[arg(long, help = "Optional source IP to bind to")]
     pub bind_ip: Option<String>,
 
     #[command(subcommand)]
@@ -63,7 +65,7 @@ pub enum Commands {
     /// Force cellular bearer disconnect & re-attach (RF reset)
     Reconnect,
 
-    /// Launch built-in Web Control Dashboard in default browser
+    /// Launch built-in Web Control Dashboard with automated CORS proxy
     Ui {
         #[arg(short, long, default_value_t = 8080, help = "Local HTTP server port")]
         port: u16,
@@ -75,9 +77,9 @@ pub enum Commands {
 
 #[derive(Debug, Clone)]
 pub struct ZTEClient {
-    base_url: String,
-    password: String,
-    client: Client,
+    pub base_url: String,
+    pub password: String,
+    pub client: Client,
 }
 
 impl ZTEClient {
@@ -170,13 +172,9 @@ impl ZTEClient {
     }
 
     pub fn get_status(&self) -> Result<serde_json::Value, String> {
-        let keys = "wa_inner_version,hardware_version,modem_msn,imei,network_type,network_provider,net_select_mode,network_lte_rsrp,network_sinr,lte_rsrp,lte_rsrq,lte_snr,lte_rssi,wan_active_band,wan_active_channel,lte_pci,lte_earfcn,cell_id,lte_band_lock,sim_state,wan_ipaddr,lan_ipaddr,opms_wan_mode,loginfo,Language,web_version";
-        let mut data = self.goform_get(keys, true)?;
-        if data.get("loginfo").and_then(|v| v.as_str()) != Some("ok") {
-            let _ = self.login();
-            data = self.goform_get(keys, true)?;
-        }
-        Ok(data)
+        let _ = self.login();
+        let keys = "wa_inner_version,hardware_version,modem_msn,imei,network_type,network_provider,net_select_mode,network_lte_rsrp,network_sinr,lte_rsrp,lte_rsrq,lte_snr,lte_rssi,wan_active_band,wan_active_channel,lte_pci,lte_earfcn,cell_id,network_cell_id,lte_band_lock,sim_state,wan_ipaddr,lan_ipaddr,opms_wan_mode,loginfo,Language,web_version,ppp_status";
+        self.goform_get(keys, true)
     }
 
     pub fn lock_bands(&self, bands: &[String]) -> Result<serde_json::Value, String> {
@@ -253,6 +251,18 @@ fn chrono_ms() -> u128 {
         .as_millis()
 }
 
+fn get_first_non_empty<'a>(data: &'a serde_json::Value, keys: &[&str], default: &'a str) -> &'a str {
+    for k in keys {
+        if let Some(s) = data.get(*k).and_then(|v| v.as_str()) {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                return trimmed;
+            }
+        }
+    }
+    default
+}
+
 fn decode_bands(mask_str: &str) -> String {
     let raw = mask_str.trim_start_matches("0x");
     if let Ok(val) = u64::from_str_radix(raw, 16) {
@@ -276,11 +286,11 @@ fn decode_bands(mask_str: &str) -> String {
     mask_str.to_string()
 }
 
-pub fn run_ui_server(port: u16, no_open: bool) {
+pub fn run_ui_server(client: Arc<ZTEClient>, port: u16, no_open: bool) {
     let addr = format!("127.0.0.1:{}", port);
     let server = Server::http(&addr).expect("Failed to start local HTTP server");
     println!("============================================================");
-    println!("  🚀 ZTE K12 Web Dashboard running at: http://{}", addr);
+    println!("  🚀 ZTE K12 Web Dashboard & Proxy running at: http://{}", addr);
     println!("  Press Ctrl+C to stop.");
     println!("============================================================");
 
@@ -288,17 +298,51 @@ pub fn run_ui_server(port: u16, no_open: bool) {
         let _ = open::that(format!("http://{}", addr));
     }
 
-    for request in server.incoming_requests() {
-        let response = Response::from_string(EMBEDDED_UI_HTML).with_header(
-            Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap(),
-        );
-        let _ = request.respond(response);
+    for mut request in server.incoming_requests() {
+        let url_path = request.url().to_string();
+
+        if url_path.starts_with("/goform/") {
+            let target_url = format!("{}{}", client.base_url, url_path);
+
+            let result_body = if *request.method() == Method::Post {
+                let mut body_bytes = Vec::new();
+                let _ = request.as_reader().read_to_end(&mut body_bytes);
+                client
+                    .client
+                    .post(&target_url)
+                    .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+                    .header("X-Requested-With", "XMLHttpRequest")
+                    .header("Referer", format!("{}/index.html", client.base_url))
+                    .body(body_bytes)
+                    .send()
+                    .and_then(|r| r.text())
+                    .unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+            } else {
+                client
+                    .client
+                    .get(&target_url)
+                    .header("X-Requested-With", "XMLHttpRequest")
+                    .header("Referer", format!("{}/index.html", client.base_url))
+                    .send()
+                    .and_then(|r| r.text())
+                    .unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+            };
+
+            let response = Response::from_string(result_body)
+                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap())
+                .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
+            let _ = request.respond(response);
+        } else {
+            let response = Response::from_string(EMBEDDED_UI_HTML)
+                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap());
+            let _ = request.respond(response);
+        }
     }
 }
 
 fn main() {
     let cli = Cli::parse();
-    let client = ZTEClient::new(&cli.host, &cli.password, cli.bind_ip.as_deref());
+    let client = Arc::new(ZTEClient::new(&cli.host, &cli.password, cli.bind_ip.as_deref()));
 
     match cli.command {
         None | Some(Commands::Status) => match client.get_status() {
@@ -306,22 +350,33 @@ fn main() {
                 println!("============================================================");
                 println!("           📡 ZTE K12 CELLULAR ROUTER STATUS");
                 println!("============================================================");
-                let hw = status.get("hardware_version").and_then(|v| v.as_str()).unwrap_or("K12");
-                let fw = status.get("wa_inner_version").and_then(|v| v.as_str()).unwrap_or("N/A");
-                let imei = status.get("imei").and_then(|v| v.as_str()).unwrap_or("N/A");
-                let net_type = status.get("network_type").and_then(|v| v.as_str()).unwrap_or("N/A");
-                let rsrp = status.get("lte_rsrp").or_else(|| status.get("network_lte_rsrp")).and_then(|v| v.as_str()).unwrap_or("--");
-                let rssi = status.get("lte_rssi").and_then(|v| v.as_str()).unwrap_or("--");
-                let sinr = status.get("lte_snr").or_else(|| status.get("network_sinr")).and_then(|v| v.as_str()).unwrap_or("--");
-                let rsrq = status.get("lte_rsrq").and_then(|v| v.as_str()).unwrap_or("--");
-                let band_mask = status.get("lte_band_lock").and_then(|v| v.as_str()).unwrap_or("0x0000800c4");
+                let hw = get_first_non_empty(&status, &["hardware_version"], "K12HW1.0");
+                let fw = get_first_non_empty(&status, &["wa_inner_version"], "N/A");
+                let imei = get_first_non_empty(&status, &["imei"], "N/A");
+                let provider = get_first_non_empty(&status, &["network_provider", "strFullName", "strShortName"], "Unknown");
+                let net_type = get_first_non_empty(&status, &["network_type"], "LTE");
+                let ppp = get_first_non_empty(&status, &["ppp_status"], "connected");
+                let wan_ip = get_first_non_empty(&status, &["wan_ipaddr"], "--");
+                
+                let active_band = get_first_non_empty(&status, &["wan_active_band"], "N/A");
+                let active_channel = get_first_non_empty(&status, &["wan_active_channel", "lte_earfcn"], "N/A");
+                let pci = get_first_non_empty(&status, &["lte_pci"], "--");
+                let cell_id = get_first_non_empty(&status, &["cell_id", "network_cell_id"], "--");
+
+                let rsrp = get_first_non_empty(&status, &["network_lte_rsrp", "lte_rsrp"], "--");
+                let rssi = get_first_non_empty(&status, &["lte_rssi"], "--");
+                let sinr = get_first_non_empty(&status, &["network_sinr", "lte_snr"], "--");
+                let rsrq = get_first_non_empty(&status, &["lte_rsrq"], "--");
+                
+                let band_mask = get_first_non_empty(&status, &["lte_band_lock"], "0x0000800c4");
                 let bands = decode_bands(band_mask);
 
-                println!(" Device:        {} (Firmware: {})", hw, fw);
+                println!(" Device / FW:   {} | {}", hw, fw);
                 println!(" IMEI:          {}", imei);
-                println!(" Network State: {}", net_type);
+                println!(" Operator:      {} ({}, PPP: {}, IP: {})", provider, net_type, ppp, wan_ip);
+                println!(" Active Tower:  Band: {} | EARFCN: {} | PCI: {} | Cell ID: {}", active_band, active_channel, pci, cell_id);
                 println!(" Signal Levels: RSRP: {} dBm | RSSI: {} dBm", rsrp, rssi);
-                println!(" Quality:       SINR/SNR: {} dB | RSRQ: {} dB", sinr, rsrq);
+                println!(" Signal Quality:SINR: {} dB | RSRQ: {} dB", sinr, rsrq);
                 println!(" Allowed Bands: {} (Mask: {})", bands, band_mask);
                 println!("============================================================");
             }
@@ -330,8 +385,8 @@ fn main() {
 
         Some(Commands::Monitor { interval }) => {
             println!("[*] Starting live cellular monitor (every {:.1}s). Press Ctrl+C to stop.", interval);
-            println!("{:<8} | {:<20} | {:<8} | {:<8} | {:<8} | {:<8}", "Time", "Network State", "RSRP", "RSSI", "SINR", "RSRQ");
-            println!("{}", "-".repeat(70));
+            println!("{:<8} | {:<12} | {:<14} | {:<8} | {:<10} | {:<10} | {:<8} | {:<6}", "Time", "Operator", "Active Band", "EARFCN", "RSRP", "RSSI", "SINR", "PCI");
+            println!("{}", "-".repeat(92));
             loop {
                 if let Ok(st) = client.get_status() {
                     let ts = chrono_ms() / 1000 % 86400;
@@ -340,13 +395,15 @@ fn main() {
                     let secs = ts % 60;
                     let time_str = format!("{:02}:{:02}:{:02}", hrs, mins, secs);
 
-                    let net = st.get("network_type").and_then(|v| v.as_str()).unwrap_or("N/A");
-                    let rsrp = st.get("lte_rsrp").or_else(|| st.get("network_lte_rsrp")).and_then(|v| v.as_str()).unwrap_or("--");
-                    let rssi = st.get("lte_rssi").and_then(|v| v.as_str()).unwrap_or("--");
-                    let sinr = st.get("lte_snr").or_else(|| st.get("network_sinr")).and_then(|v| v.as_str()).unwrap_or("--");
-                    let rsrq = st.get("lte_rsrq").and_then(|v| v.as_str()).unwrap_or("--");
+                    let op = get_first_non_empty(&st, &["network_provider", "strShortName"], "N/A");
+                    let band = get_first_non_empty(&st, &["wan_active_band"], "N/A");
+                    let earfcn = get_first_non_empty(&st, &["wan_active_channel", "lte_earfcn"], "--");
+                    let rsrp = get_first_non_empty(&st, &["network_lte_rsrp", "lte_rsrp"], "--");
+                    let rssi = get_first_non_empty(&st, &["lte_rssi"], "--");
+                    let sinr = get_first_non_empty(&st, &["network_sinr", "lte_snr"], "--");
+                    let pci = get_first_non_empty(&st, &["lte_pci"], "--");
 
-                    println!("{:<8} | {:<20} | {:<8} | {:<8} | {:<8} | {:<8}", time_str, net, format!("{} dBm", rsrp), format!("{} dBm", rssi), format!("{} dB", sinr), format!("{} dB", rsrq));
+                    println!("{:<8} | {:<12} | {:<14} | {:<8} | {:<10} | {:<10} | {:<8} | {:<6}", time_str, op, band, earfcn, format!("{} dBm", rsrp), format!("{} dBm", rssi), format!("{} dB", sinr), pci);
                 }
                 thread::sleep(Duration::from_secs_f64(interval));
             }
@@ -383,7 +440,7 @@ fn main() {
         }
 
         Some(Commands::Ui { port, no_open }) => {
-            run_ui_server(port, no_open);
+            run_ui_server(client, port, no_open);
         }
     }
 }
