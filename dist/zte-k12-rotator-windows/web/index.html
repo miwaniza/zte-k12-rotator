@@ -87,7 +87,7 @@
       flex-shrink: 0;
     }
 
-    .action-buttons { display: flex; align-items: center; gap: 6px; }
+    .action-buttons { display: flex; align-items: center; gap: 8px; }
 
     button {
       background: #21262d;
@@ -102,15 +102,29 @@
       align-items: center;
       gap: 6px;
       white-space: nowrap;
-      transition: background 0.2s, border-color 0.2s, transform 0.15s;
+      transition: background 0.2s, border-color 0.2s, transform 0.15s, box-shadow 0.2s;
     }
     button:hover { background: #30363d; border-color: #8b949e; transform: translateY(-1px); }
     button:active { background: #161b22; transform: translateY(0); }
-    button.btn-primary { background: #238636; border-color: rgba(240, 246, 252, 0.1); color: #fff; }
-    button.btn-primary:hover { background: #2ea043; box-shadow: 0 0 8px rgba(46, 160, 67, 0.4); }
-    button.btn-purple { background: #6e40c9; border-color: rgba(240, 246, 252, 0.1); color: #fff; }
-    button.btn-purple:hover { background: #8957e5; box-shadow: 0 0 8px rgba(137, 87, 229, 0.4); }
-    button.btn-sm { padding: 3px 8px; font-size: 11px; }
+    
+    /* Prominent Single Hero Rotation Button */
+    button.btn-hero {
+      background: linear-gradient(135deg, #238636 0%, #2ea043 100%);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 6px 18px;
+      box-shadow: 0 2px 6px rgba(35, 134, 54, 0.4);
+    }
+    button.btn-hero:hover {
+      background: linear-gradient(135deg, #2ea043 0%, #3fb950 100%);
+      box-shadow: 0 0 12px rgba(46, 160, 67, 0.6);
+      transform: translateY(-1px);
+    }
+    button.btn-hero:active { transform: translateY(0); }
+
+    button.btn-sm { padding: 4px 10px; font-size: 11px; }
 
     .band-locks-inline {
       display: flex;
@@ -355,14 +369,11 @@
     </div>
   </header>
 
-  <!-- Dense Top Action Strip -->
+  <!-- Dense Top Action Strip (Single Primary Button) -->
   <div class="top-strip">
     <div class="action-buttons">
-      <button class="btn-primary" id="btn-airplane" onclick="executeComprehensiveRotation('airplane')" title="Миттєва ротація частоти та скидання радіосесії для нового IP/регіону">
-        ✈️ Airplane Reconnect (Новий IP & Регіон)
-      </button>
-      <button class="btn-purple" id="btn-rotate-next" onclick="executeComprehensiveRotation('rotate')" title="Band-Hop перемикання B3 ⇄ B8 ⇄ B7 ⇄ B20 з гарантованою зміною IP/регіону">
-        ⚡ Ротувати вишку (Band-Hop)
+      <button class="btn-hero" id="btn-rotate-main" onclick="executeSingleRotation()" title="1 клік: повне скидання сесії, зміна частоти та гарантований новий IP/регіон">
+        ⚡ Змінити IP (Ротація)
       </button>
       <button class="btn-sm" onclick="restoreFullAuto()" title="Скинути всі локи в режим Auto">
         🔄 Авто
@@ -634,7 +645,7 @@
       const params = new URLSearchParams(window.location.search);
       const action = params.get('action');
       if (action === 'airplane' || action === 'rotate') {
-        setTimeout(() => executeComprehensiveRotation(action), 800);
+        setTimeout(() => executeSingleRotation(), 800);
       }
     }
 
@@ -1016,17 +1027,14 @@
       }
     }
 
-    // Unified Comprehensive Band-Hop + Airplane Reset + Guaranteed Distinct IP Engine
-    async function executeComprehensiveRotation(source = 'airplane') {
-      const btnAirplane = document.getElementById("btn-airplane");
-      const btnRotate = document.getElementById("btn-rotate-next");
-      btnAirplane.disabled = true;
-      btnRotate.disabled = true;
-      btnAirplane.innerText = "⏳ Отримання НОВОГО IP & Регіону...";
-      btnRotate.innerText = "⏳ Ротація...";
+    // 1-Click Single Master Rotation Engine (Band-Hop + Bearer Reset + Guaranteed Distinct IP/Region)
+    async function executeSingleRotation() {
+      const btn = document.getElementById("btn-rotate-main");
+      btn.disabled = true;
+      btn.innerText = "⏳ Зміна IP & Регіону...";
 
       const gStatus = document.getElementById("guarantee-status");
-      gStatus.innerText = "🔄 Перемикання частоти та скидання сесії...";
+      gStatus.innerText = "🔄 Ротація частоти та скидання сесії...";
       gStatus.style.color = "var(--warning)";
 
       recordCurrentToHistory();
@@ -1090,10 +1098,8 @@
       gStatus.innerText = "🛡️ Унікальність IP & Регіону: Підтверджено ✅";
       gStatus.style.color = "var(--success-bright)";
 
-      btnAirplane.disabled = false;
-      btnAirplane.innerText = "✈️ Airplane Reconnect (Новий IP & Регіон)";
-      btnRotate.disabled = false;
-      btnRotate.innerText = "⚡ Ротувати вишку (Band-Hop)";
+      btn.disabled = false;
+      btn.innerText = "⚡ Змінити IP (Ротація)";
     }
 
     async function connectToTowerSafely(earfcn, pci) {
