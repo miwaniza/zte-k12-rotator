@@ -11,9 +11,12 @@ use tiny_http::{Header, Method, Response, Server};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const EMBEDDED_UI_HTML: &str = include_str!("../web/index.html");
+const EMBEDDED_MANIFEST: &str = include_str!("../web/manifest.json");
+const EMBEDDED_SW_JS: &str = include_str!("../web/sw.js");
+const EMBEDDED_ICON_SVG: &str = include_str!("../web/icon.svg");
 
 #[derive(Parser, Debug)]
-#[command(name = "zte-control", author, version = VERSION, about = "Universal Controller, IP Rotator & Service for ZTE K12 (ZX297520)")]
+#[command(name = "zte-control", author, version = VERSION, about = "Universal Controller, IP Rotator & PWA Service for ZTE K12 (ZX297520)")]
 pub struct Cli {
     #[arg(long, default_value = "http://192.168.0.1", help = "Router base URL")]
     pub host: String,
@@ -78,7 +81,7 @@ pub enum Commands {
         action: ServiceAction,
     },
 
-    /// Launch built-in Web Control Dashboard with automated CORS proxy
+    /// Launch built-in Web Control Dashboard with automated CORS proxy & PWA
     Ui {
         #[arg(short, long, default_value_t = 8080, help = "Local HTTP server port")]
         port: u16,
@@ -376,7 +379,7 @@ pub fn run_ui_server(client: Arc<ZTEClient>, port: u16, no_open: bool) {
     let server = Server::http(&server_addr).expect("Failed to start HTTP server");
 
     println!("============================================================");
-    println!("  🚀 ZTE K12 Master Web Controller v{} Started", VERSION);
+    println!("  🚀 ZTE K12 Master Web Controller & PWA v{} Started", VERSION);
     println!("  👉 Dashboard: http://127.0.0.1:{}", port);
     println!("  📡 Router:    {}", client.base_url);
     println!("============================================================");
@@ -395,7 +398,23 @@ pub fn run_ui_server(client: Arc<ZTEClient>, port: u16, no_open: bool) {
     for mut request in server.incoming_requests() {
         let url_path = request.url().to_string();
 
-        if url_path.starts_with("/api/reconnect") || url_path.starts_with("/api/rotate") {
+        if url_path.starts_with("/manifest.json") {
+            let response = Response::from_string(EMBEDDED_MANIFEST)
+                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/manifest+json; charset=utf-8"[..]).unwrap())
+                .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
+            let _ = request.respond(response);
+        } else if url_path.starts_with("/sw.js") {
+            let response = Response::from_string(EMBEDDED_SW_JS)
+                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/javascript; charset=utf-8"[..]).unwrap())
+                .with_header(Header::from_bytes(&b"Service-Worker-Allowed"[..], &b"/"[..]).unwrap())
+                .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
+            let _ = request.respond(response);
+        } else if url_path.starts_with("/icon.svg") {
+            let response = Response::from_string(EMBEDDED_ICON_SVG)
+                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"image/svg+xml; charset=utf-8"[..]).unwrap())
+                .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
+            let _ = request.respond(response);
+        } else if url_path.starts_with("/api/reconnect") || url_path.starts_with("/api/rotate") {
             let _ = client.reconnect_rf();
             let response = Response::from_string("{\"status\":\"success\",\"action\":\"reconnected\"}")
                 .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap())

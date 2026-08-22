@@ -3,6 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0d1117">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
   <title>ZTE K12 Mobile Controller</title>
   <style>
     :root {
@@ -305,8 +310,10 @@
       <span class="header-badge">Kyivstar 4G LTE</span>
       <span class="header-badge" id="guarantee-status" style="color: var(--success-bright);">🛡️ Унікальність IP: Активна ✅</span>
       <span id="update-badge" style="display: none; cursor: pointer; background: rgba(59, 130, 246, 0.2); border: 1px solid var(--accent); color: var(--accent); font-size: 11px; padding: 2px 8px; border-radius: 4px; font-weight: 600;" onclick="openUpdatePage()">🚀 Доступне оновлення!</span>
+      <button id="pwa-install-btn" class="btn-sm" style="display: none; background: #6e40c9; color: #fff; border-color: rgba(255,255,255,0.1);" onclick="installPWA()">📲 Встановити PWA</button>
     </div>
     <div class="header-right">
+      <button id="notif-toggle-btn" class="btn-sm" onclick="requestNotificationPermission()" title="Увімкнути нативні сповіщення Windows/OS">🔔 Сповіщення</button>
       <div style="display: flex; align-items: center; gap: 6px;">
         <span class="dot online" id="status-dot"></span>
         <span id="status-text" style="font-weight: 600;">Підключено</span>
@@ -1113,18 +1120,101 @@
       }, 2000);
     }
 
-    function showSystemNotification(newIp, band, pci) {
-      if ("Notification" in window) {
-        if (Notification.permission === "granted") {
-          const city = lastGeoData?.city || "Київ";
-          const isp = lastGeoData?.connection?.isp || "Kyivstar";
-          new Notification("📡 ZTE K12: IP успішно змінено! ✅", {
-            body: `🌐 Новий IP: ${newIp} (${city}, ${isp})\n🗼 Вишка: ${band} (PCI ${pci})`,
-            icon: "favicon.ico"
-          });
-        } else if (Notification.permission !== "denied") {
-          Notification.requestPermission();
+    let deferredInstallPrompt = null;
+    let swRegistration = null;
+
+    // 1. Register Service Worker
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .then((reg) => {
+            swRegistration = reg;
+            log('PWA Service Worker зареєстровано.');
+          })
+          .catch((err) => console.log('SW error:', err));
+      });
+    }
+
+    // 2. Handle PWA installation prompt
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredInstallPrompt = e;
+      const installBtn = document.getElementById('pwa-install-btn');
+      if (installBtn) installBtn.style.display = 'inline-flex';
+    });
+
+    function installPWA() {
+      if (deferredInstallPrompt) {
+        deferredInstallPrompt.prompt();
+        deferredInstallPrompt.userChoice.then((choice) => {
+          if (choice.outcome === 'accepted') {
+            document.getElementById('pwa-install-btn').style.display = 'none';
+          }
+          deferredInstallPrompt = null;
+        });
+      }
+    }
+
+    // 3. Notification Permission Management
+    function updateNotificationButtonUI() {
+      const btn = document.getElementById('notif-toggle-btn');
+      if (!btn) return;
+      if (!('Notification' in window)) {
+        btn.style.display = 'none';
+        return;
+      }
+      if (Notification.permission === 'granted') {
+        btn.innerText = '🔔 Сповіщення: Увімк.';
+        btn.style.borderColor = 'var(--success-bright)';
+        btn.style.color = 'var(--success-bright)';
+      } else if (Notification.permission === 'denied') {
+        btn.innerText = '🔕 Сповіщення: Заблоковано';
+        btn.style.color = 'var(--danger)';
+      } else {
+        btn.innerText = '🔔 Увімкнути сповіщення';
+      }
+    }
+
+    async function requestNotificationPermission() {
+      if ('Notification' in window) {
+        const perm = await Notification.requestPermission();
+        updateNotificationButtonUI();
+        if (perm === 'granted') {
+          showSystemNotification(curPublicIp || curWanIp, curKey ? towerDatabase[curKey]?.band : 'LTE', curPci);
         }
+      }
+    }
+
+    function showSystemNotification(newIp, band, pci) {
+      if ('Notification' in window && Notification.permission === 'granted') {
+        const city = lastGeoData?.city || 'Київ';
+        const isp = lastGeoData?.connection?.isp || 'Kyivstar';
+        const title = '📡 ZTE K12: IP успішно змінено! ✅';
+        const options = {
+          body: `🌐 Новий IP: ${newIp} (${city}, ${isp})\n🗼 Вишка: ${band} (PCI ${pci})`,
+          icon: '/icon.svg',
+          badge: '/icon.svg',
+          tag: 'zte-ip-rotation',
+          renotify: true,
+          requireInteraction: false
+        };
+
+        if (swRegistration && swRegistration.showNotification) {
+          swRegistration.showNotification(title, options);
+        } else {
+          new Notification(title, options);
+        }
+      }
+    }
+
+    // 4. Handle PWA Action query parameters (/?action=airplane or /?action=rotate)
+    function handleUrlActions() {
+      const params = new URLSearchParams(window.location.search);
+      const action = params.get('action');
+      if (action === 'airplane') {
+        setTimeout(() => guaranteedDistinctReconnect(), 800);
+      } else if (action === 'rotate') {
+        setTimeout(() => guaranteedDistinctRotate(), 800);
       }
     }
 
@@ -1151,6 +1241,8 @@
     fetchStatus();
     fetchGeoLocation();
     checkForAppUpdates();
+    updateNotificationButtonUI();
+    handleUrlActions();
     setInterval(fetchStatus, 3000);
     setInterval(checkForAppUpdates, 300000);
   </script>
