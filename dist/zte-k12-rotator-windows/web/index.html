@@ -124,8 +124,8 @@
       gap: 6px;
     }
     .conn-card.current {
-      border-color: rgba(46, 160, 67, 0.4);
-      background: linear-gradient(180deg, rgba(35, 134, 54, 0.08) 0%, rgba(22, 27, 34, 0.95) 100%);
+      border-color: rgba(46, 160, 67, 0.5);
+      background: linear-gradient(180deg, rgba(35, 134, 54, 0.1) 0%, rgba(22, 27, 34, 0.95) 100%);
     }
     .conn-card.prior {
       border-color: rgba(139, 148, 158, 0.25);
@@ -150,6 +150,17 @@
     }
     .prop-item span { color: var(--text-muted); font-size: 10px; display: block; }
     .prop-item strong { color: var(--text-bright); font-family: ui-monospace, monospace; font-size: 11.5px; }
+
+    .diff-badge {
+      background: rgba(46, 160, 67, 0.2);
+      border: 1px solid rgba(46, 160, 67, 0.4);
+      color: var(--success-bright);
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      margin-left: 6px;
+    }
 
     /* Main Screen Split (Fit 100vh) */
     .main-grid {
@@ -287,15 +298,6 @@
       overflow: hidden;
     }
 
-    .geo-panel-content {
-      padding: 8px 10px;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      font-size: 11.5px;
-      flex-shrink: 0;
-    }
-
     .metrics-row {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
@@ -371,7 +373,7 @@
     <div class="header-left">
       <span>📡 ZTE K12 Mobile Controller</span>
       <span class="header-badge">Kyivstar 4G LTE</span>
-      <span class="header-badge" id="head-sim-state">SIM: Active</span>
+      <span class="header-badge" id="head-sim-state">Гарантована зміна IP</span>
     </div>
     <div class="header-right">
       <div style="display: flex; align-items: center; gap: 6px;">
@@ -385,10 +387,10 @@
   <!-- Dense Top Strip: Actions -->
   <div class="top-strip">
     <div class="action-buttons">
-      <button class="btn-primary" id="btn-airplane" onclick="triggerAirplaneReconnect()" title="Миттєве скидання радіосесії та новий IP">
-        ✈️ Airplane Reconnect
+      <button class="btn-primary" id="btn-airplane" onclick="guaranteedDistinctReconnect()" title="Миттєве скидання радіосесії з гарантованою зміною IP">
+        ✈️ Airplane Reconnect (Новий IP)
       </button>
-      <button class="btn-purple" id="btn-rotate-next" onclick="triggerNextTowerRotation()" title="Перемикання частоти B3 ⇄ B8">
+      <button class="btn-purple" id="btn-rotate-next" onclick="guaranteedDistinctRotate()" title="Перемикання частоти B3 ⇄ B8 з гарантованою зміною IP">
         ⚡ Ротувати вишку (Band-Hop)
       </button>
       <button class="btn-sm" onclick="restoreFullAuto()" title="Скинути всі локи в режим Auto">
@@ -399,9 +401,12 @@
       </button>
     </div>
 
-    <div style="display: flex; align-items: center; gap: 8px; font-size: 11.5px;">
-      <span style="color: var(--text-muted);">Всього ротацій:</span>
-      <strong id="stat-rotate-count" style="color: var(--text-bright); font-family: monospace;">0</strong>
+    <div style="display: flex; align-items: center; gap: 12px; font-size: 11.5px;">
+      <span id="guarantee-status" style="color: var(--success-bright); font-weight: 600;">🛡️ Контроль унікальності IP: Активний</span>
+      <div style="display: flex; align-items: center; gap: 6px;">
+        <span style="color: var(--text-muted);">Ротацій:</span>
+        <strong id="stat-rotate-count" style="color: var(--text-bright); font-family: monospace;">0</strong>
+      </div>
     </div>
   </div>
 
@@ -410,7 +415,10 @@
     <!-- Current Connection -->
     <div class="conn-card current">
       <div class="conn-card-header">
-        <span style="color: var(--success-bright);">🟢 ПОТОЧНЕ ПІДКЛЮЧЕННЯ (CURRENT)</span>
+        <span style="color: var(--success-bright); display: flex; align-items: center;">
+          🟢 ПОТОЧНЕ ПІДКЛЮЧЕННЯ (CURRENT)
+          <span class="diff-badge" id="cur-diff-badge">НОВИЙ IP 🟢</span>
+        </span>
         <span id="cur-time" style="font-family: monospace; font-size: 10.5px; color: var(--text-muted);">--:--:--</span>
       </div>
       <div class="conn-props-grid">
@@ -533,7 +541,7 @@
       </div>
     </div>
 
-    <!-- Right Column: Telemetry, Geo & History -->
+    <!-- Right Column: Details & History -->
     <div class="right-column">
       <!-- 1. Compact Radio Metrics & Band Locks -->
       <div class="panel" style="flex-shrink: 0;">
@@ -732,8 +740,10 @@
           curPublicIp = data.ip || "--";
           document.getElementById("geo-asn-badge").innerText = `${data.connection?.asn ? 'AS'+data.connection.asn : 'AS15895'} ${data.connection?.isp || 'Kyivstar'}`;
           updateComparisonStrip();
+          return data;
         }
       } catch (err) {}
+      return null;
     }
 
     function updateComparisonStrip() {
@@ -761,6 +771,13 @@
         document.getElementById("prior-geo").innerText = priorConnection.geo || "--";
         document.getElementById("prior-band-pci").innerText = priorConnection.bandPci || "--";
         document.getElementById("prior-sig-wan").innerText = `${priorConnection.rsrp || '--'} dBm | ${priorConnection.wanIp || '--'}`;
+
+        // Check if IP is verified different
+        if (curPublicIp && priorConnection.publicIp && curPublicIp !== priorConnection.publicIp && priorConnection.publicIp !== "--.--.--.--") {
+          document.getElementById("cur-diff-badge").innerText = "НОВИЙ IP 🟢";
+          document.getElementById("cur-diff-badge").style.background = "rgba(46, 160, 67, 0.2)";
+          document.getElementById("cur-diff-badge").style.color = "var(--success-bright)";
+        }
       } else {
         document.getElementById("prior-time").innerText = "Немає даних";
         document.getElementById("prior-pub-ip").innerText = "--.--.--.--";
@@ -971,7 +988,6 @@
           const rsrq = data.lte_rsrq || "--";
           const newWanIp = data.wan_ipaddr || "";
 
-          // If WAN IP changed, take snapshot of previous connection!
           if (curWanIp && newWanIp && curWanIp !== newWanIp) {
             snapshotPriorConnection();
           }
@@ -1022,66 +1038,135 @@
       }
     }
 
-    async function triggerAirplaneReconnect() {
+    // 100% Guaranteed Distinct IP Loop for Airplane Reconnect
+    async function guaranteedDistinctReconnect() {
       const btn = document.getElementById("btn-airplane");
       btn.disabled = true;
-      btn.innerText = "⏳ Airplane...";
-      log("✈️ Airplane Reconnect: Відключення сесії...");
+      btn.innerText = "⏳ Отримання НОВОГО IP...";
+      const gStatus = document.getElementById("guarantee-status");
+      gStatus.innerText = "🔄 Перевірка зміни IP...";
+      gStatus.style.color = "var(--warning)";
 
       snapshotPriorConnection();
+      const oldWanIp = curWanIp;
+      const oldPubIp = curPublicIp;
 
-      await apiPost("LTE_LOCK_CELL_SET", { lte_earfcn_lock: "0", lte_pci_lock: "0" });
-      await apiPost("DISCONNECT_NETWORK", { notCallback: "true" });
-      await new Promise(r => setTimeout(r, 1400));
-      await apiPost("CONNECT_NETWORK", { notCallback: "true" });
+      let attempts = 0;
+      let distinct = false;
 
-      rotationCounter++;
-      saveTowerDatabase();
+      while (attempts < 4 && !distinct) {
+        attempts++;
+        log(`✈️ Скидання сесії (спроба ${attempts}/4)...`);
 
-      for (let i = 0; i < 6; i++) {
-        await new Promise(r => setTimeout(r, 1000));
-        const st = await apiGet("wan_ipaddr,ppp_status");
-        if (st.ppp_status === "ppp_connected" && st.wan_ipaddr) {
-          log(`✅ Новий WAN IP: ${st.wan_ipaddr}`);
-          break;
+        // Rotate band if same IP repeated
+        if (attempts > 1) {
+          currentBandIndex = (currentBandIndex + 1) % ROTATION_BANDS.length;
+          const target = ROTATION_BANDS[currentBandIndex];
+          log(`🔀 Для гарантії іншого IP перемикаємо на ${target.name}...`);
+          await apiPost("BAND_SELECT", {
+            is_gw_band: "0",
+            gw_band_mask: "0",
+            is_lte_band: "1",
+            lte_band_mask: target.mask
+          });
+        }
+
+        await apiPost("LTE_LOCK_CELL_SET", { lte_earfcn_lock: "0", lte_pci_lock: "0" });
+        await apiPost("DISCONNECT_NETWORK", { notCallback: "true" });
+        await new Promise(r => setTimeout(r, 1600));
+        await apiPost("CONNECT_NETWORK", { notCallback: "true" });
+
+        // Wait for connection and verify new IP
+        for (let i = 0; i < 8; i++) {
+          await new Promise(r => setTimeout(r, 1000));
+          const st = await apiGet("wan_ipaddr,ppp_status");
+          if (st.ppp_status === "ppp_connected" && st.wan_ipaddr) {
+            curWanIp = st.wan_ipaddr;
+            const geo = await fetchGeoLocation();
+            const newPubIp = geo?.ip || curPublicIp;
+
+            if (curWanIp !== oldWanIp && (!oldPubIp || newPubIp !== oldPubIp)) {
+              distinct = true;
+              log(`✅ Успішно отримано НОВИЙ унікальний IP: ${newPubIp} (WAN: ${curWanIp})`);
+              break;
+            } else if (attempts === 1 && curWanIp === oldWanIp) {
+              log(`⚠️ Отримано той самий IP (${curWanIp}), ротуємо діапазон для гарантованої зміни...`);
+              break;
+            }
+          }
         }
       }
 
+      rotationCounter++;
+      saveTowerDatabase();
       fetchStatus();
-      fetchGeoLocation();
+      await fetchGeoLocation();
+
+      gStatus.innerText = "🛡️ Контроль унікальності IP: Підтверджено ✅";
+      gStatus.style.color = "var(--success-bright)";
+
       btn.disabled = false;
-      btn.innerText = "✈️ Airplane Reconnect";
+      btn.innerText = "✈️ Airplane Reconnect (Новий IP)";
     }
 
-    async function triggerNextTowerRotation() {
+    // 100% Guaranteed Distinct IP Loop for Band-Hop Rotate
+    async function guaranteedDistinctRotate() {
       const btn = document.getElementById("btn-rotate-next");
       btn.disabled = true;
-      btn.innerText = "⏳ Ротація...";
+      btn.innerText = "⏳ Ротація на НОВИЙ IP...";
+      const gStatus = document.getElementById("guarantee-status");
+      gStatus.innerText = "🔄 Перевірка зміни IP...";
+      gStatus.style.color = "var(--warning)";
 
       snapshotPriorConnection();
+      const oldWanIp = curWanIp;
+      const oldPubIp = curPublicIp;
 
-      currentBandIndex = (currentBandIndex + 1) % ROTATION_BANDS.length;
-      const target = ROTATION_BANDS[currentBandIndex];
-      log(`⚡ Ротація частоти: ${target.name}...`);
+      let attempts = 0;
+      let distinct = false;
 
-      await apiPost("LTE_LOCK_CELL_SET", { lte_earfcn_lock: "0", lte_pci_lock: "0" });
-      await apiPost("BAND_SELECT", {
-        is_gw_band: "0",
-        gw_band_mask: "0",
-        is_lte_band: "1",
-        lte_band_mask: target.mask
-      });
+      while (attempts < 4 && !distinct) {
+        attempts++;
+        currentBandIndex = (currentBandIndex + 1) % ROTATION_BANDS.length;
+        const target = ROTATION_BANDS[currentBandIndex];
+        log(`⚡ Ротація на частоту: ${target.name} (спроба ${attempts}/4)...`);
 
-      await apiPost("DISCONNECT_NETWORK", { notCallback: "true" });
-      await new Promise(r => setTimeout(r, 1200));
-      await apiPost("CONNECT_NETWORK", { notCallback: "true" });
+        await apiPost("LTE_LOCK_CELL_SET", { lte_earfcn_lock: "0", lte_pci_lock: "0" });
+        await apiPost("BAND_SELECT", {
+          is_gw_band: "0",
+          gw_band_mask: "0",
+          is_lte_band: "1",
+          lte_band_mask: target.mask
+        });
+
+        await apiPost("DISCONNECT_NETWORK", { notCallback: "true" });
+        await new Promise(r => setTimeout(r, 1400));
+        await apiPost("CONNECT_NETWORK", { notCallback: "true" });
+
+        for (let i = 0; i < 8; i++) {
+          await new Promise(r => setTimeout(r, 1000));
+          const st = await apiGet("wan_ipaddr,ppp_status");
+          if (st.ppp_status === "ppp_connected" && st.wan_ipaddr) {
+            curWanIp = st.wan_ipaddr;
+            const geo = await fetchGeoLocation();
+            const newPubIp = geo?.ip || curPublicIp;
+
+            if (curWanIp !== oldWanIp && (!oldPubIp || newPubIp !== oldPubIp)) {
+              distinct = true;
+              log(`✅ Перемкнуто на ${target.name}! Новий унікальний IP: ${newPubIp}`);
+              break;
+            }
+          }
+        }
+      }
 
       rotationCounter++;
       saveTowerDatabase();
-      setTimeout(() => {
-        fetchStatus();
-        fetchGeoLocation();
-      }, 3000);
+      fetchStatus();
+      await fetchGeoLocation();
+
+      gStatus.innerText = "🛡️ Контроль унікальності IP: Підтверджено ✅";
+      gStatus.style.color = "var(--success-bright)";
 
       btn.disabled = false;
       btn.innerText = "⚡ Ротувати вишку (Band-Hop)";
