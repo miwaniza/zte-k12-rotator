@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ZTE K12 All-in-One Master Tower Controller & IP Rotator</title>
+  <title>ZTE K12 Master Controller & IP Geo Rotator</title>
   <style>
     :root {
       --bg: #090d16;
@@ -41,10 +41,10 @@
 
     .container {
       width: 100%;
-      max-width: 1140px;
+      max-width: 1160px;
       display: flex;
       flex-direction: column;
-      gap: 22px;
+      gap: 20px;
     }
 
     header {
@@ -199,6 +199,53 @@
     }
     .stat-pill span { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
     .stat-pill strong { font-size: 1.05rem; color: var(--text); }
+
+    /* Geo Location Card */
+    .geo-hero {
+      background: linear-gradient(135deg, rgba(88, 166, 255, 0.15), rgba(188, 140, 255, 0.15));
+      border: 1px solid rgba(88, 166, 255, 0.3);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+    }
+
+    .geo-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 14px;
+    }
+
+    .geo-item {
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 10px;
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .geo-item span { font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+    .geo-item strong { font-size: 1.05rem; color: var(--text); display: flex; align-items: center; gap: 8px; }
+
+    .ip-display-box {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(0, 0, 0, 0.45);
+      border: 1px solid rgba(88, 166, 255, 0.35);
+      border-radius: 10px;
+      padding: 12px 18px;
+    }
+    .ip-text-large {
+      font-size: 1.45rem;
+      font-weight: 800;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      color: var(--accent);
+      letter-spacing: 0.5px;
+    }
 
     .webhook-box {
       background: rgba(0, 0, 0, 0.45);
@@ -497,8 +544,8 @@
       <div class="logo-group">
         <div class="logo-icon">📡</div>
         <div class="title-area">
-          <h1>ZTE K12 Master Tower Controller & IP Rotator</h1>
-          <p id="device-info">Kyivstar 4G LTE | Повний Каталог Вишок & Миттєвий Airplane Reconnect</p>
+          <h1>ZTE K12 Master Controller & IP Geo Rotator</h1>
+          <p id="device-info">Kyivstar 4G LTE | Повний Каталог Вишок, Geo-IP та Airplane Reconnect</p>
         </div>
       </div>
       <div class="status-badge">
@@ -522,6 +569,9 @@
         <div style="display: flex; gap: 8px;">
           <button class="btn-secondary" onclick="restoreFullAuto()">
             🔄 Скинути в Авто
+          </button>
+          <button class="btn-secondary" onclick="fetchGeoLocation()">
+            🌍 Оновити Geo IP
           </button>
         </div>
       </div>
@@ -571,6 +621,66 @@
           <div class="progress-bar-fill" id="scan-progress-fill"></div>
         </div>
         <div id="scan-detail-text" style="font-size: 0.8rem; color: var(--text-muted); font-family: monospace;">Ініціалізація...</div>
+      </div>
+    </section>
+
+    <!-- Public IP & Geolocation Card -->
+    <section class="geo-hero">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h2 style="font-size: 1.15rem; font-weight: 700; display: flex; align-items: center; gap: 10px;">
+          🌍 Публічний IP та Геолокація (Geo-IP)
+        </h2>
+        <span id="geo-status-badge" style="font-size: 0.8rem; color: var(--success-glow); background: rgba(46, 160, 67, 0.15); padding: 3px 10px; border-radius: 12px; border: 1px solid rgba(46, 160, 67, 0.3);">
+          🟢 Оновлено
+        </span>
+      </div>
+
+      <div class="ip-display-box">
+        <div>
+          <span style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; display: block; margin-bottom: 2px;">
+            Публічна IP-адреса (Зовнішній IPv4)
+          </span>
+          <span class="ip-text-large" id="geo-public-ip">--.--.--.--</span>
+        </div>
+        <button class="btn-secondary btn-sm" onclick="copyPublicIp()">📋 Скопіювати IP</button>
+      </div>
+
+      <div class="geo-grid">
+        <div class="geo-item">
+          <span>Країна & Прапор</span>
+          <strong id="geo-country">🇺🇦 Україна</strong>
+        </div>
+        <div class="geo-item">
+          <span>Регіон / Область</span>
+          <strong id="geo-region">--</strong>
+        </div>
+        <div class="geo-item">
+          <span>Місто</span>
+          <strong id="geo-city">--</strong>
+        </div>
+        <div class="geo-item">
+          <span>Провайдер (ISP) & Організація</span>
+          <strong id="geo-isp" style="color: var(--accent);">Kyivstar PJSC</strong>
+        </div>
+        <div class="geo-item">
+          <span>Номер автономної системи (ASN)</span>
+          <strong id="geo-asn">AS15895</strong>
+        </div>
+        <div class="geo-item">
+          <span>Координати (Широта / Довгота)</span>
+          <strong id="geo-coords">
+            <span id="geo-coords-text">--</span>
+            <a id="geo-map-link" href="#" target="_blank" style="color: var(--accent); font-size: 0.8rem; text-decoration: underline; margin-left: 6px; display: none;">🗺️ Карта</a>
+          </strong>
+        </div>
+        <div class="geo-item">
+          <span>Часовий пояс</span>
+          <strong id="geo-timezone">Europe/Kyiv (GMT+3)</strong>
+        </div>
+        <div class="geo-item">
+          <span>Тип підключення</span>
+          <strong id="geo-conn-type" style="color: var(--purple);">Cellular 4G LTE</strong>
+        </div>
       </div>
     </section>
 
@@ -743,14 +853,15 @@
     <!-- History Log Table -->
     <section class="card">
       <div class="card-header">
-        <h2>📜 Історія отриманих IP-адрес та сесій</h2>
-        <button class="btn-secondary btn-sm" onclick="clearIpHistory()">🗑️ Очистити історію IP</button>
+        <h2>📜 Історія отриманих IP-адрес, локацій та сесій</h2>
+        <button class="btn-secondary btn-sm" onclick="clearIpHistory()">🗑️ Очистити історію</button>
       </div>
       <table class="tower-table">
         <thead>
           <tr>
             <th>Час</th>
             <th>Отриманий WAN IP</th>
+            <th>Місто / Локація</th>
             <th>Діапазон / Частота</th>
             <th>EARFCN</th>
             <th>PCI</th>
@@ -758,7 +869,7 @@
           </tr>
         </thead>
         <tbody id="ip-history-body">
-          <tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 16px;">Історія порожня. Натисніть «Airplane Reconnect» або «Ротувати».</td></tr>
+          <tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 16px;">Історія порожня. Натисніть «Airplane Reconnect» або «Ротувати».</td></tr>
         </tbody>
       </table>
     </section>
@@ -780,6 +891,7 @@
     let currentFilterGroup = "all";
     let currentBandIndex = 0;
     let ipHistory = JSON.parse(localStorage.getItem("zte_ip_history") || "[]");
+    let lastGeoData = null;
 
     const ROTATION_BANDS = [
       { name: "Band 3 (1800 MHz)", mask: "0x0000000000000004" },
@@ -873,6 +985,71 @@
       } catch (err) {
         log(`Помилка входу: ${err.message}`);
         return false;
+      }
+    }
+
+    // Geolocation Fetcher
+    async function fetchGeoLocation() {
+      try {
+        document.getElementById("geo-status-badge").innerText = "⏳ Оновлення...";
+        let data = null;
+
+        // Try local backend proxy first (/api/geo)
+        try {
+          const resp = await fetch("/api/geo");
+          if (resp.ok) {
+            data = await resp.json();
+          }
+        } catch(e) {}
+
+        // Fallback to client-side public API
+        if (!data || !data.ip) {
+          const resp = await fetch("https://ipwho.is/");
+          data = await resp.json();
+        }
+
+        if (data && (data.ip || data.success)) {
+          lastGeoData = data;
+          const ip = data.ip || "--";
+          const country = data.country || "Україна";
+          const flag = data.flag?.emoji || "🇺🇦";
+          const region = data.region || data.region_code || "--";
+          const city = data.city || "--";
+          const isp = data.connection?.isp || data.isp || "Kyivstar PJSC";
+          const asn = data.connection?.asn ? `AS${data.connection.asn}` : (data.asn || "AS15895");
+          const lat = data.latitude || data.lat;
+          const lon = data.longitude || data.lon;
+          const tz = data.timezone?.id || data.timezone || "Europe/Kyiv";
+
+          document.getElementById("geo-public-ip").innerText = ip;
+          document.getElementById("geo-country").innerText = `${flag} ${country}`;
+          document.getElementById("geo-region").innerText = region;
+          document.getElementById("geo-city").innerText = city;
+          document.getElementById("geo-isp").innerText = isp;
+          document.getElementById("geo-asn").innerText = asn;
+          document.getElementById("geo-timezone").innerText = tz;
+
+          if (lat && lon) {
+            document.getElementById("geo-coords-text").innerText = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+            const mapLink = document.getElementById("geo-map-link");
+            mapLink.href = `https://www.google.com/maps?q=${lat},${lon}`;
+            mapLink.style.display = "inline";
+          }
+
+          document.getElementById("geo-status-badge").innerText = "🟢 Оновлено";
+          log(`[Geo] Публічний IP: ${ip} (${city}, ${country})`);
+        }
+      } catch (err) {
+        document.getElementById("geo-status-badge").innerText = "⚠️ Помилка Geo";
+      }
+    }
+
+    function copyPublicIp() {
+      const ip = document.getElementById("geo-public-ip").innerText;
+      if (ip && ip !== "--.--.--.--") {
+        navigator.clipboard.writeText(ip).then(() => {
+          log(`📋 IP скопійовано: ${ip}`);
+        });
       }
     }
 
@@ -1014,7 +1191,7 @@
     function renderHistory() {
       const tbody = document.getElementById("ip-history-body");
       if (!ipHistory.length) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 16px;">Історія порожня. Натисніть «Airplane Reconnect» або «Ротувати».</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 16px;">Історія порожня. Натисніть «Airplane Reconnect» або «Ротувати».</td></tr>';
         return;
       }
       let html = "";
@@ -1023,6 +1200,7 @@
           <tr class="tower-row">
             <td style="color: var(--text-muted);">${new Date(h.time).toLocaleTimeString()}</td>
             <td style="font-family: monospace; color: var(--success-glow); font-weight: 700;">${h.ip}</td>
+            <td><span style="color: var(--accent);">${h.city || "Київ"}</span>, ${h.country || "UA"}</td>
             <td><strong>${h.band}</strong></td>
             <td><code>${h.earfcn}</code></td>
             <td><code>${h.pci}</code></td>
@@ -1037,9 +1215,14 @@
       if (!ip || ip === "--") return;
       if (ipHistory.length && ipHistory[0].ip === ip) return;
 
+      const city = lastGeoData?.city || "Київ";
+      const country = lastGeoData?.country || "Україна";
+
       ipHistory.unshift({
         time: Date.now(),
         ip: ip,
+        city: city,
+        country: country,
         band: band,
         earfcn: earfcn,
         pci: pci,
@@ -1199,6 +1382,7 @@
       }
 
       fetchStatus();
+      fetchGeoLocation();
       btn.disabled = false;
       btn.innerText = "✈️ AIRPLANE RECONNECT (ЯК НА IPHONE)";
     }
@@ -1227,7 +1411,10 @@
 
       rotationCounter++;
       saveTowerDatabase();
-      setTimeout(fetchStatus, 3000);
+      setTimeout(() => {
+        fetchStatus();
+        fetchGeoLocation();
+      }, 3000);
       log(`✅ Перемкнуто на ${target.name}! Запит нового IP...`);
 
       btn.disabled = false;
@@ -1255,6 +1442,7 @@
         } else {
           log(`✅ Успішно зафіксовано на EARFCN=${earfcn}, PCI=${pci}!`);
           fetchStatus();
+          fetchGeoLocation();
         }
       }, 3500);
     }
@@ -1269,7 +1457,10 @@
         lte_band_mask: "0x00000000000800c4"
       });
       await apiPost("CONNECT_NETWORK", { notCallback: "true" });
-      setTimeout(fetchStatus, 2000);
+      setTimeout(() => {
+        fetchStatus();
+        fetchGeoLocation();
+      }, 2000);
       log("✅ Режим Auto увімкнено.");
     }
 
@@ -1393,11 +1584,15 @@
         lte_band_mask: hexMask
       });
       log(`Результат: ${JSON.stringify(res)}`);
-      setTimeout(fetchStatus, 2000);
+      setTimeout(() => {
+        fetchStatus();
+        fetchGeoLocation();
+      }, 2000);
     }
 
     saveTowerDatabase();
     fetchStatus();
+    fetchGeoLocation();
     setInterval(fetchStatus, 3000);
   </script>
 </body>

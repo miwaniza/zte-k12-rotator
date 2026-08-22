@@ -62,8 +62,11 @@ pub enum Commands {
         reconnect: bool,
     },
 
-    /// Force cellular bearer disconnect & re-attach (RF reset)
+    /// Force cellular bearer disconnect & re-attach (RF reset / Airplane mode)
     Reconnect,
+
+    /// Rotate to next LTE band and obtain a new IP address
+    Rotate,
 
     /// Launch built-in Web Control Dashboard with automated CORS proxy
     Ui {
@@ -104,204 +107,270 @@ impl ZTEClient {
         }
     }
 
-    fn sha256_upper(data: &str) -> String {
+    pub fn sha256_hex_upper(input: &str) -> String {
         let mut hasher = Sha256::new();
-        hasher.update(data.as_bytes());
+        hasher.update(input.as_bytes());
         let result = hasher.finalize();
-        hex::encode_upper(result)
+        hex::encode(result).to_uppercase()
     }
 
-    pub fn goform_get(&self, cmd_keys: &str, multi_data: bool) -> Result<serde_json::Value, String> {
-        let multi = if multi_data { "&multi_data=1" } else { "" };
+    pub fn get_cmd(&self, cmd: &str, multi: bool) -> Result<HashMap<String, serde_json::Value>, String> {
+        let multi_flag = if multi { "&multi_data=1" } else { "" };
         let url = format!(
             "{}/goform/goform_get_cmd_process?cmd={}{}&isTest=false&_={}",
             self.base_url,
-            cmd_keys,
-            multi,
+            cmd,
+            multi_flag,
             chrono_ms()
         );
+
         let resp = self
             .client
             .get(&url)
             .header("X-Requested-With", "XMLHttpRequest")
             .header("Referer", format!("{}/index.html", self.base_url))
             .send()
-            .map_err(|e| format!("GET request failed: {}", e))?;
+            .map_err(|e| format!("HTTP GET error: {}", e))?;
 
-        resp.json().map_err(|e| format!("Invalid JSON response: {}", e))
+        let json_map: HashMap<String, serde_json::Value> = resp
+            .json()
+            .map_err(|e| format!("JSON decode error: {}", e))?;
+        Ok(json_map)
     }
 
-    pub fn goform_set(&self, goform_id: &str, params: &[(&str, &str)]) -> Result<serde_json::Value, String> {
+    pub fn get_ad_token(&self) -> Result<String, String> {
+        let rd_map = self.get_cmd("RD", false)?;
+        let rd = rd_map
+            .get("RD")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let fw_hash = Self::sha256_hex_upper("BD_SMARTDIGITALUAK12V1.0.0B01");
+        let ad = Self::sha256_hex_upper(&format!("{}{}", fw_hash, rd));
+        Ok(ad)
+    }
+
+    pub fn login(&self) -> Result<bool, String> {
+        let ld_map = self.get_cmd("LD", false)?;
+        let ld = ld_map
+            .get("LD")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let p1 = Self::sha256_hex_upper(&self.password);
+        let password_hash = Self::sha256_hex_upper(&format!("{}{}", p1, ld));
+
         let url = format!("{}/goform/goform_set_cmd_process", self.base_url);
-        let mut form = HashMap::new();
-        form.insert("isTest", "false");
-        form.insert("goformId", goform_id);
-        for (k, v) in params {
-            form.insert(k, v);
-        }
+        let mut params = HashMap::new();
+        params.insert("isTest", "false");
+        params.insert("goformId", "LOGIN");
+        params.insert("password", &password_hash);
+        params.insert("save_login", "1");
 
         let resp = self
             .client
             .post(&url)
+            .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
             .header("X-Requested-With", "XMLHttpRequest")
             .header("Referer", format!("{}/index.html", self.base_url))
-            .form(&form)
+            .form(&params)
             .send()
-            .map_err(|e| format!("POST request failed: {}", e))?;
+            .map_err(|e| format!("Login POST error: {}", e))?;
 
-        resp.json().map_err(|e| format!("Invalid JSON response: {}", e))
+        let res_map: HashMap<String, serde_json::Value> = resp
+            .json()
+            .map_err(|e| format!("JSON decode error: {}", e))?;
+
+        if let Some(r) = res_map.get("result").and_then(|v| v.as_str()) {
+            if r == "0" || r == "4" {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
-    pub fn login(&self) -> Result<(), String> {
-        let ld_resp = self.goform_get("LD", false)?;
-        let ld = ld_resp
-            .get("LD")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-
-        let p1 = Self::sha256_upper(&self.password);
-        let p_hash = Self::sha256_upper(&format!("{}{}", p1, ld));
-
-        let res = self.goform_set("LOGIN", &[("password", &p_hash), ("save_login", "1")])?;
-        if let Some(r) = res.get("result").and_then(|v| v.as_str()) {
-            if r == "0" || r == "4" {
+    pub fn ensure_logged_in(&self) -> Result<(), String> {
+        let status = self.get_cmd("loginfo", false)?;
+        if let Some(s) = status.get("loginfo").and_then(|v| v.as_str()) {
+            if s == "ok" {
                 return Ok(());
             }
         }
-        Err(format!("Login rejected: {:?}", res))
+        if !self.login()? {
+            return Err("Failed to authenticate to ZTE K12 WebUI".to_string());
+        }
+        Ok(())
     }
 
-    pub fn get_status(&self) -> Result<serde_json::Value, String> {
-        let _ = self.login();
-        let keys = "wa_inner_version,hardware_version,modem_msn,imei,network_type,network_provider,net_select_mode,network_lte_rsrp,network_sinr,lte_rsrp,lte_rsrq,lte_snr,lte_rssi,wan_active_band,wan_active_channel,lte_pci,lte_earfcn,cell_id,network_cell_id,lte_band_lock,sim_state,wan_ipaddr,lan_ipaddr,opms_wan_mode,loginfo,Language,web_version,ppp_status";
-        self.goform_get(keys, true)
-    }
+    pub fn post_cmd(&self, goform_id: &str, mut params: HashMap<&str, &str>, with_ad: bool) -> Result<HashMap<String, serde_json::Value>, String> {
+        self.ensure_logged_in()?;
 
-    pub fn lock_bands(&self, bands: &[String]) -> Result<serde_json::Value, String> {
-        let mut total_val: u64 = 0;
-        let mut has_all = false;
-
-        for b in bands {
-            let b_up = b.trim().to_uppercase();
-            match b_up.as_str() {
-                "ALL" => has_all = true,
-                "B3" | "3" => total_val |= 0x4,
-                "B7" | "7" => total_val |= 0x40,
-                "B8" | "8" => total_val |= 0x80,
-                "B20" | "20" => total_val |= 0x80000,
-                _ => {}
-            }
+        let mut ad_token = String::new();
+        if with_ad {
+            ad_token = self.get_ad_token()?;
+            params.insert("AD", &ad_token);
         }
 
-        let hex_mask = if has_all || total_val == 0 {
-            "0x00000000000800c4".to_string()
-        } else {
-            format!("0x{:016x}", total_val)
-        };
+        params.insert("isTest", "false");
+        params.insert("goformId", goform_id);
 
-        println!("[*] Applying LTE Band Lock: {} (Mask: {})", bands.join(", "), hex_mask);
-        self.goform_set(
-            "BAND_SELECT",
-            &[
-                ("is_gw_band", "0"),
-                ("gw_band_mask", "0"),
-                ("is_lte_band", "1"),
-                ("lte_band_mask", &hex_mask),
-            ],
-        )
+        let url = format!("{}/goform/goform_set_cmd_process", self.base_url);
+        let resp = self
+            .client
+            .post(&url)
+            .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+            .header("X-Requested-With", "XMLHttpRequest")
+            .header("Referer", format!("{}/index.html", self.base_url))
+            .form(&params)
+            .send()
+            .map_err(|e| format!("POST command error: {}", e))?;
+
+        let res_map: HashMap<String, serde_json::Value> = resp
+            .json()
+            .map_err(|e| format!("JSON response error: {}", e))?;
+        Ok(res_map)
     }
 
-    pub fn lock_cell(&self, earfcn: u32, pci: u32) -> Result<serde_json::Value, String> {
-        let earfcn_str = earfcn.to_string();
-        let pci_str = pci.to_string();
-        println!("[*] Locking cell tower: EARFCN={}, PCI={}...", earfcn, pci);
-        self.goform_set(
-            "LTE_LOCK_CELL_SET",
-            &[
-                ("lte_earfcn_lock", &earfcn_str),
-                ("lte_pci_lock", &pci_str),
-            ],
-        )
+    pub fn get_status(&self) -> Result<HashMap<String, serde_json::Value>, String> {
+        self.ensure_logged_in()?;
+        let keys = "wa_inner_version,hardware_version,imei,network_provider,network_type,network_lte_rsrp,lte_rsrp,lte_rsrq,lte_snr,network_sinr,lte_rssi,lte_band_lock,wan_active_band,wan_active_channel,lte_pci,cell_id,network_cell_id,wan_ipaddr,ppp_status,strFullName,strShortName";
+        self.get_cmd(keys, true)
     }
 
-    pub fn unlock_cell(&self) -> Result<serde_json::Value, String> {
-        println!("[*] Releasing cell lock (Auto cell selection)...");
-        self.goform_set(
-            "LTE_LOCK_CELL_SET",
-            &[
-                ("lte_earfcn_lock", "0"),
-                ("lte_pci_lock", "0"),
-            ],
-        )
+    pub fn lock_bands(&self, bands: &[String]) -> Result<String, String> {
+        let mut mask: u64 = 0;
+        for b in bands {
+            let s = b.to_uppercase();
+            if s == "B3" || s == "3" { mask |= 0x4; }
+            else if s == "B7" || s == "7" { mask |= 0x40; }
+            else if s == "B8" || s == "8" { mask |= 0x80; }
+            else if s == "B20" || s == "20" { mask |= 0x80000; }
+            else if s == "ALL" { mask |= 0x800c4; }
+        }
+
+        let hex_mask = format!("0x{:016x}", mask);
+        let mut params = HashMap::new();
+        params.insert("is_gw_band", "0");
+        params.insert("gw_band_mask", "0");
+        params.insert("is_lte_band", "1");
+        params.insert("lte_band_mask", &hex_mask);
+
+        let res = self.post_cmd("BAND_SELECT", params, true)?;
+        Ok(serde_json::to_string(&res).unwrap_or_default())
+    }
+
+    pub fn lock_cell(&self, earfcn: u32, pci: u32) -> Result<String, String> {
+        let earfcn_s = earfcn.to_string();
+        let pci_s = pci.to_string();
+
+        let mut params = HashMap::new();
+        params.insert("lte_earfcn_lock", &earfcn_s);
+        params.insert("lte_pci_lock", &pci_s);
+
+        let res = self.post_cmd("LTE_LOCK_CELL_SET", params, true)?;
+        Ok(serde_json::to_string(&res).unwrap_or_default())
+    }
+
+    pub fn unlock_cell(&self) -> Result<String, String> {
+        let mut params = HashMap::new();
+        params.insert("lte_earfcn_lock", "0");
+        params.insert("lte_pci_lock", "0");
+        let res = self.post_cmd("LTE_LOCK_CELL_SET", params, true)?;
+        Ok(serde_json::to_string(&res).unwrap_or_default())
     }
 
     pub fn reconnect_rf(&self) -> Result<(), String> {
-        println!("[*] Cycling cellular connection...");
-        let _ = self.goform_set("DISCONNECT_NETWORK", &[]);
+        let _ = self.unlock_cell();
+        let mut p1 = HashMap::new();
+        p1.insert("notCallback", "true");
+        let _ = self.post_cmd("DISCONNECT_NETWORK", p1, true);
         thread::sleep(Duration::from_millis(1500));
-        let _ = self.goform_set("CONNECT_NETWORK", &[]);
+        let mut p2 = HashMap::new();
+        p2.insert("notCallback", "true");
+        let _ = self.post_cmd("CONNECT_NETWORK", p2, true);
         Ok(())
     }
 }
 
 fn chrono_ms() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
 }
 
-fn get_first_non_empty<'a>(data: &'a serde_json::Value, keys: &[&str], default: &'a str) -> &'a str {
+fn decode_bands(mask_str: &str) -> String {
+    let raw = mask_str.trim_start_matches("0x").trim_start_matches("0X");
+    if let Ok(mask) = u64::from_str_radix(raw, 16) {
+        let mut list = Vec::new();
+        if mask & 0x4 != 0 { list.push("B3 (1800)"); }
+        if mask & 0x40 != 0 { list.push("B7 (2600)"); }
+        if mask & 0x80 != 0 { list.push("B8 (900)"); }
+        if mask & 0x80000 != 0 { list.push("B20 (800)"); }
+        if list.is_empty() { "None".to_string() } else { list.join(", ") }
+    } else {
+        "Auto".to_string()
+    }
+}
+
+fn get_first_non_empty<'a>(map: &'a HashMap<String, serde_json::Value>, keys: &[&str], default_val: &'a str) -> &'a str {
     for k in keys {
-        if let Some(s) = data.get(*k).and_then(|v| v.as_str()) {
-            let trimmed = s.trim();
-            if !trimmed.is_empty() {
-                return trimmed;
+        if let Some(v) = map.get(*k) {
+            if let Some(s) = v.as_str() {
+                if !s.trim().is_empty() && s != "None" {
+                    return s;
+                }
             }
         }
     }
-    default
-}
-
-fn decode_bands(mask_str: &str) -> String {
-    let raw = mask_str.trim_start_matches("0x");
-    if let Ok(val) = u64::from_str_radix(raw, 16) {
-        let mut bands = Vec::new();
-        if val & 0x4 != 0 {
-            bands.push("B3 (1800)");
-        }
-        if val & 0x40 != 0 {
-            bands.push("B7 (2600)");
-        }
-        if val & 0x80 != 0 {
-            bands.push("B8 (900)");
-        }
-        if val & 0x80000 != 0 {
-            bands.push("B20 (800)");
-        }
-        if !bands.is_empty() {
-            return bands.join(", ");
-        }
-    }
-    mask_str.to_string()
+    default_val
 }
 
 pub fn run_ui_server(client: Arc<ZTEClient>, port: u16, no_open: bool) {
-    let addr = format!("127.0.0.1:{}", port);
-    let server = Server::http(&addr).expect("Failed to start local HTTP server");
+    let server_addr = format!("0.0.0.0:{}", port);
+    let server = Server::http(&server_addr).expect("Failed to start HTTP server");
+
     println!("============================================================");
-    println!("  🚀 ZTE K12 Web Dashboard & Proxy running at: http://{}", addr);
-    println!("  Press Ctrl+C to stop.");
+    println!("  🚀 ZTE K12 Master Web Controller & IP Rotator Started");
+    println!("  👉 URL: http://127.0.0.1:{}", port);
+    println!("  📡 Router: {}", client.base_url);
     println!("============================================================");
 
     if !no_open {
-        let _ = open::that(format!("http://{}", addr));
+        let url = format!("http://127.0.0.1:{}", port);
+        let _ = open::that(url);
     }
+
+    let http_client = Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap_or_else(|_| Client::new());
 
     for mut request in server.incoming_requests() {
         let url_path = request.url().to_string();
 
-        if url_path.starts_with("/goform/") {
+        if url_path.starts_with("/api/reconnect") || url_path.starts_with("/api/rotate") {
+            let _ = client.reconnect_rf();
+            let response = Response::from_string("{\"status\":\"success\",\"action\":\"reconnected\"}")
+                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap())
+                .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
+            let _ = request.respond(response);
+        } else if url_path.starts_with("/api/geo") {
+            // Geolocation proxy
+            let geo_data = http_client
+                .get("https://ipwho.is/")
+                .send()
+                .and_then(|r| r.text())
+                .unwrap_or_else(|_| "{\"success\":false,\"error\":\"geo_fetch_failed\"}".to_string());
+
+            let response = Response::from_string(geo_data)
+                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap())
+                .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
+            let _ = request.respond(response);
+        } else if url_path.starts_with("/goform/") {
             let target_url = format!("{}{}", client.base_url, url_path);
 
             let result_body = if *request.method() == Method::Post {
@@ -434,9 +503,9 @@ fn main() {
             Err(e) => eprintln!("[-] Error unlocking cell: {}", e),
         },
 
-        Some(Commands::Reconnect) => {
+        Some(Commands::Reconnect) | Some(Commands::Rotate) => {
             let _ = client.reconnect_rf();
-            println!("[+] Cellular reconnect triggered.");
+            println!("[+] Cellular Airplane reconnect triggered. New IP requested.");
         }
 
         Some(Commands::Ui { port, no_open }) => {
