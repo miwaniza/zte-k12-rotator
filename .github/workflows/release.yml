@@ -1,0 +1,118 @@
+name: Build and Publish Releases
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build - ${{ matrix.os }} (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary_name: zte-control.exe
+            archive_name: zte-control-windows-x64.zip
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary_name: zte-control
+            archive_name: zte-control-macos-arm64.tar.gz
+          - os: macos-13
+            target: x86_64-apple-darwin
+            binary_name: zte-control
+            archive_name: zte-control-macos-x64.tar.gz
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary_name: zte-control
+            archive_name: zte-control-linux-x64.tar.gz
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build Binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package Windows Complete Dist (Zip)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $DistDir = "dist/zte-k12-rotator-windows"
+          New-Item -ItemType Directory -Path "$DistDir/web" -Force | Out-Null
+          New-Item -ItemType Directory -Path "$DistDir/tools" -Force | Out-Null
+          
+          Copy-Item "target/${{ matrix.target }}/release/zte-control.exe" "$DistDir/zte-control.exe" -Force
+          Copy-Item "web/index.html" "$DistDir/web/index.html" -Force
+          Copy-Item "tools/*" "$DistDir/tools/" -Recurse -Force
+          Copy-Item "*.bat" "$DistDir/" -Force
+          Copy-Item "README_WINDOWS.txt" "$DistDir/" -Force -ErrorAction SilentlyContinue
+
+          Compress-Archive -Path "$DistDir/*" -DestinationPath "dist/zte-k12-rotator-windows.zip" -Force
+          Copy-Item "target/${{ matrix.target }}/release/zte-control.exe" "${{ matrix.binary_name }}"
+
+      - name: Package Unix Archive
+        if: matrix.os != 'windows-latest'
+        run: |
+          cp target/${{ matrix.target }}/release/zte-control ${{ matrix.binary_name }}
+          tar -czf ${{ matrix.archive_name }} -C target/${{ matrix.target }}/release zte-control
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            ${{ matrix.binary_name }}
+            ${{ matrix.archive_name }}
+            dist/zte-k12-rotator-windows.zip
+          if-no-files-found: ignore
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare Release Assets
+        run: |
+          mkdir -p release_assets
+          find artifacts -type f -name "*.exe" -o -name "zte-control" -o -name "*.zip" -o -name "*.tar.gz" | while read file; do
+            cp "$file" release_assets/
+          done
+          ls -lh release_assets/
+
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release_assets/*
+          name: Release ${{ github.ref_name }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
