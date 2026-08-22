@@ -57,16 +57,18 @@ Write-Host "[*] Configuring Windows Background Service (Auto-Start on Logon)..."
 try {
     $ExePath = "$InstallDir\zte-control.exe"
     $TaskName = "ZTEK12RotatorService"
-    $TaskAction = "\"$ExePath\" ui --no-open"
+    $TaskAction = "`"$ExePath`" ui --no-open"
     
     # Try creating elevated task, fallback to user level
-    $p = Start-Process -FilePath "schtasks" -ArgumentList "/Create /TN `"$TaskName`" /TR `"$TaskAction`" /SC ONLOGON /RL HIGHEST /F" -Wait -PassThru -NoNewWindow
+    $schArgsElevated = @("/Create", "/TN", $TaskName, "/TR", $TaskAction, "/SC", "ONLOGON", "/RL", "HIGHEST", "/F")
+    $p = Start-Process -FilePath "schtasks" -ArgumentList $schArgsElevated -Wait -PassThru -NoNewWindow
     if ($p.ExitCode -ne 0) {
-        Start-Process -FilePath "schtasks" -ArgumentList "/Create /TN `"$TaskName`" /TR `"$TaskAction`" /SC ONLOGON /F" -Wait -NoNewWindow
+        $schArgsUser = @("/Create", "/TN", $TaskName, "/TR", $TaskAction, "/SC", "ONLOGON", "/F")
+        Start-Process -FilePath "schtasks" -ArgumentList $schArgsUser -Wait -NoNewWindow
     }
     
     # Start the service task
-    Start-Process -FilePath "schtasks" -ArgumentList "/Run /TN `"$TaskName`"" -Wait -NoNewWindow
+    Start-Process -FilePath "schtasks" -ArgumentList @("/Run", "/TN", $TaskName) -Wait -NoNewWindow
     Write-Host "[+] Windows Background Service registered & started!" -ForegroundColor Green
 } catch {
     Write-Host "[!] Service registration warning: $_" -ForegroundColor Yellow
