@@ -19,8 +19,8 @@ const EMBEDDED_ICON_SVG: &str = include_str!("../web/icon.svg");
 static BAND_CYCLE_INDEX: AtomicUsize = AtomicUsize::new(0);
 
 const ROTATION_MASKS: &[(&str, &str)] = &[
-    ("Band 3 (1800 MHz)", "0x0000000000000004"),
     ("Band 8 (900 MHz)",  "0x0000000000000080"),
+    ("Band 3 (1800 MHz)", "0x0000000000000004"),
     ("Band 7 (2600 MHz)", "0x0000000000000040"),
     ("Band 20 (800 MHz)", "0x0000000000080000"),
     ("All Bands (Auto)",  "0x00000000000800c4"),
@@ -440,12 +440,14 @@ pub fn run_ui_server(client: Arc<ZTEClient>, port: u16, no_open: bool) {
         if url_path.starts_with("/manifest.json") {
             let response = Response::from_string(EMBEDDED_MANIFEST)
                 .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/manifest+json; charset=utf-8"[..]).unwrap())
+                .with_header(Header::from_bytes(&b"Cache-Control"[..], &b"no-cache, no-store, must-revalidate"[..]).unwrap())
                 .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
             let _ = request.respond(response);
         } else if url_path.starts_with("/sw.js") {
             let response = Response::from_string(EMBEDDED_SW_JS)
                 .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/javascript; charset=utf-8"[..]).unwrap())
                 .with_header(Header::from_bytes(&b"Service-Worker-Allowed"[..], &b"/"[..]).unwrap())
+                .with_header(Header::from_bytes(&b"Cache-Control"[..], &b"no-cache, no-store, must-revalidate"[..]).unwrap())
                 .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
             let _ = request.respond(response);
         } else if url_path.starts_with("/icon.svg") {
@@ -458,6 +460,7 @@ pub fn run_ui_server(client: Arc<ZTEClient>, port: u16, no_open: bool) {
             let json_res = format!("{{\"status\":\"success\",\"action\":\"rotated\",\"wan_ip\":\"{}\"}}", new_ip);
             let response = Response::from_string(json_res)
                 .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap())
+                .with_header(Header::from_bytes(&b"Cache-Control"[..], &b"no-cache, no-store, must-revalidate"[..]).unwrap())
                 .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
             let _ = request.respond(response);
         } else if url_path.starts_with("/api/update/check") {
@@ -469,10 +472,10 @@ pub fn run_ui_server(client: Arc<ZTEClient>, port: u16, no_open: bool) {
             };
             let response = Response::from_string(json_body)
                 .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap())
+                .with_header(Header::from_bytes(&b"Cache-Control"[..], &b"no-cache, no-store, must-revalidate"[..]).unwrap())
                 .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
             let _ = request.respond(response);
         } else if url_path.starts_with("/api/geo") {
-            // Multi-provider Geo telemetry with Region & Oblast details
             let geo_data = http_client
                 .get("http://ip-api.com/json/?fields=status,message,country,countryCode,region,regionName,city,zip,lat,lon,timezone,isp,org,as,query")
                 .send()
@@ -487,6 +490,7 @@ pub fn run_ui_server(client: Arc<ZTEClient>, port: u16, no_open: bool) {
 
             let response = Response::from_string(geo_data)
                 .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap())
+                .with_header(Header::from_bytes(&b"Cache-Control"[..], &b"no-cache, no-store, must-revalidate"[..]).unwrap())
                 .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
             let _ = request.respond(response);
         } else if url_path.starts_with("/goform/") {
@@ -518,11 +522,14 @@ pub fn run_ui_server(client: Arc<ZTEClient>, port: u16, no_open: bool) {
 
             let response = Response::from_string(result_body)
                 .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap())
+                .with_header(Header::from_bytes(&b"Cache-Control"[..], &b"no-cache, no-store, must-revalidate"[..]).unwrap())
                 .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
             let _ = request.respond(response);
         } else {
             let response = Response::from_string(EMBEDDED_UI_HTML)
-                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap());
+                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap())
+                .with_header(Header::from_bytes(&b"Cache-Control"[..], &b"no-cache, no-store, must-revalidate"[..]).unwrap())
+                .with_header(Header::from_bytes(&b"Pragma"[..], &b"no-cache"[..]).unwrap());
             let _ = request.respond(response);
         }
     }
