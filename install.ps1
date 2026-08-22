@@ -43,16 +43,6 @@ try {
     Remove-Item -Path $TempZip -Force -ErrorAction SilentlyContinue
 }
 
-# Create run-service.vbs if not present
-$VbsContent = @"
-Set WshShell = CreateObject("WScript.Shell")
-Set fso = CreateObject("Scripting.FileSystemObject")
-scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
-exePath = scriptDir & "\zte-control.exe"
-WshShell.Run Chr(34) & exePath & Chr(34) & " ui --no-open", 0, False
-"@
-Set-Content -Path "$InstallDir\run-service.vbs" -Value $VbsContent -Force
-
 # 4. Add to User PATH
 $UserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
 if ($UserPath -notlike "*$InstallDir*") {
@@ -68,7 +58,6 @@ try {
     $TaskName = "ZTEK12RotatorService"
     $TrValue = "wscript.exe `"$VbsPath`""
 
-    # Execute schtasks directly
     & schtasks /Create /TN $TaskName /TR $TrValue /SC ONLOGON /RL HIGHEST /F 2>$null
     if ($LASTEXITCODE -ne 0) {
         & schtasks /Create /TN $TaskName /TR $TrValue /SC ONLOGON /F 2>$null
@@ -79,25 +68,57 @@ try {
     Write-Host "[!] Service registration notice: $_" -ForegroundColor Yellow
 }
 
-# 6. Create Desktop & Start Menu Shortcuts
+# 6. Create Desktop & Taskbar / Start Menu Shortcuts
 try {
     $WshShell = New-Object -ComObject WScript.Shell
     $DesktopPath = [Environment]::GetFolderPath("Desktop")
-    $Shortcut = $WshShell.CreateShortcut("$DesktopPath\ZTE K12 Controller.lnk")
-    $Shortcut.TargetPath = "$InstallDir\start-dashboard.bat"
-    $Shortcut.WorkingDirectory = $InstallDir
-    $Shortcut.Description = "ZTE K12 4G LTE Controller & IP Rotator"
-    $Shortcut.Save()
-    Write-Host "[+] Desktop Shortcut created: $DesktopPath\ZTE K12 Controller.lnk" -ForegroundColor Green
-
     $StartMenuPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
-    $SmShortcut = $WshShell.CreateShortcut("$StartMenuPath\ZTE K12 Controller.lnk")
-    $SmShortcut.TargetPath = "$InstallDir\start-dashboard.bat"
-    $SmShortcut.WorkingDirectory = $InstallDir
-    $SmShortcut.Description = "ZTE K12 4G LTE Controller & IP Rotator"
-    $SmShortcut.Save()
+    $TaskBarPath = "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
+
+    # Shortcut 1: Open Dashboard
+    $ScDash = $WshShell.CreateShortcut("$DesktopPath\ZTE K12 Controller.lnk")
+    $ScDash.TargetPath = "$InstallDir\start-dashboard.bat"
+    $ScDash.WorkingDirectory = $InstallDir
+    $ScDash.Description = "ZTE K12 Web Controller Dashboard"
+    $ScDash.Save()
+
+    $ScDashSm = $WshShell.CreateShortcut("$StartMenuPath\ZTE K12 Controller.lnk")
+    $ScDashSm.TargetPath = "$InstallDir\start-dashboard.bat"
+    $ScDashSm.WorkingDirectory = $InstallDir
+    $ScDashSm.Description = "ZTE K12 Web Controller Dashboard"
+    $ScDashSm.Save()
+
+    # Shortcut 2: 1-Click Fast Rotation with System Notification
+    $ScRotate = $WshShell.CreateShortcut("$DesktopPath\⚡ Ротація IP (ZTE).lnk")
+    $ScRotate.TargetPath = "wscript.exe"
+    $ScRotate.Arguments = "`"$InstallDir\rotate-silent.vbs`""
+    $ScRotate.WorkingDirectory = $InstallDir
+    $ScRotate.Description = "1-Click IP Rotation with System Notification"
+    $ScRotate.IconLocation = "$InstallDir\zte-control.exe,0"
+    $ScRotate.Save()
+    Write-Host "[+] Desktop Shortcut created: $DesktopPath\⚡ Ротація IP (ZTE).lnk" -ForegroundColor Green
+
+    $ScRotateSm = $WshShell.CreateShortcut("$StartMenuPath\⚡ Ротація IP (ZTE).lnk")
+    $ScRotateSm.TargetPath = "wscript.exe"
+    $ScRotateSm.Arguments = "`"$InstallDir\rotate-silent.vbs`""
+    $ScRotateSm.WorkingDirectory = $InstallDir
+    $ScRotateSm.Description = "1-Click IP Rotation with System Notification"
+    $ScRotateSm.IconLocation = "$InstallDir\zte-control.exe,0"
+    $ScRotateSm.Save()
+
+    # Taskbar pin (if folder exists)
+    if (Test-Path $TaskBarPath) {
+        $ScRotateTb = $WshShell.CreateShortcut("$TaskBarPath\⚡ Ротація IP (ZTE).lnk")
+        $ScRotateTb.TargetPath = "wscript.exe"
+        $ScRotateTb.Arguments = "`"$InstallDir\rotate-silent.vbs`""
+        $ScRotateTb.WorkingDirectory = $InstallDir
+        $ScRotateTb.Description = "1-Click IP Rotation with System Notification"
+        $ScRotateTb.IconLocation = "$InstallDir\zte-control.exe,0"
+        $ScRotateTb.Save()
+        Write-Host "[+] Taskbar Pin Shortcut created: $TaskBarPath\⚡ Ротація IP (ZTE).lnk" -ForegroundColor Green
+    }
 } catch {
-    Write-Host "[!] Could not create shortcut automatically: $_" -ForegroundColor Yellow
+    Write-Host "[!] Shortcuts notice: $_" -ForegroundColor Yellow
 }
 
 # Wait for service to initialize
@@ -105,12 +126,12 @@ Start-Sleep -Seconds 1
 
 Write-Host ""
 Write-Host "==================================================================" -ForegroundColor Green
-Write-Host "   ✅ INSTALLATION & SERVICE SETUP COMPLETE!                      " -ForegroundColor Green
+Write-Host "   ✅ INSTALLATION & SHORTCUTS COMPLETE!                          " -ForegroundColor Green
 Write-Host "==================================================================" -ForegroundColor Green
-Write-Host "  📂 Directory:    $InstallDir" -ForegroundColor White
-Write-Host "  ⚙️ Service:      ZTEK12RotatorService (Running silently in background)" -ForegroundColor White
-Write-Host "  👉 Dashboard:    http://127.0.0.1:8080" -ForegroundColor White
-Write-Host "  ⚡ CLI Command:  zte-control status  (or rotate / reconnect)" -ForegroundColor White
+Write-Host "  📂 Directory:       $InstallDir" -ForegroundColor White
+Write-Host "  ⚡ 1-Click Rotate:  Ярлик '⚡ Ротація IP (ZTE)' на Робочому столі" -ForegroundColor White
+Write-Host "  🔔 Notifications:   Системні сповіщення Windows увімкнено" -ForegroundColor White
+Write-Host "  👉 Web Dashboard:   http://127.0.0.1:8080" -ForegroundColor White
 Write-Host "==================================================================" -ForegroundColor Green
 Write-Host ""
 

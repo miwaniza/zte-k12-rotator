@@ -906,6 +906,7 @@
       saveTowerDatabase();
       fetchStatus();
       await fetchGeoLocation();
+      showSystemNotification(curPublicIp || curWanIp, curKey ? towerDatabase[curKey]?.band : "LTE", curPci);
 
       gStatus.innerText = "🛡️ Унікальність IP: Підтверджено ✅";
       gStatus.style.color = "var(--success-bright)";
@@ -969,6 +970,7 @@
       saveTowerDatabase();
       fetchStatus();
       await fetchGeoLocation();
+      showSystemNotification(curPublicIp || curWanIp, curKey ? towerDatabase[curKey]?.band : "LTE", curPci);
 
       gStatus.innerText = "🛡️ Унікальність IP: Підтверджено ✅";
       gStatus.style.color = "var(--success-bright)";
@@ -1109,6 +1111,21 @@
         fetchStatus();
         fetchGeoLocation();
       }, 2000);
+    }
+
+    function showSystemNotification(newIp, band, pci) {
+      if ("Notification" in window) {
+        if (Notification.permission === "granted") {
+          const city = lastGeoData?.city || "Київ";
+          const isp = lastGeoData?.connection?.isp || "Kyivstar";
+          new Notification("📡 ZTE K12: IP успішно змінено! ✅", {
+            body: `🌐 Новий IP: ${newIp} (${city}, ${isp})\n🗼 Вишка: ${band} (PCI ${pci})`,
+            icon: "favicon.ico"
+          });
+        } else if (Notification.permission !== "denied") {
+          Notification.requestPermission();
+        }
+      }
     }
 
     async function checkForAppUpdates() {
