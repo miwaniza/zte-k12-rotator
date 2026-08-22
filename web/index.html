@@ -7,7 +7,7 @@
   <style>
     :root {
       --bg: #0b0f17;
-      --card-bg: rgba(18, 24, 38, 0.85);
+      --card-bg: rgba(18, 24, 38, 0.88);
       --card-border: rgba(255, 255, 255, 0.08);
       --text: #f0f6fc;
       --text-muted: #8b949e;
@@ -108,13 +108,13 @@
 
     /* Rotation Hero Banner */
     .rotation-hero {
-      background: linear-gradient(135deg, rgba(31, 111, 235, 0.15), rgba(188, 140, 255, 0.15));
-      border: 1px solid rgba(88, 166, 255, 0.3);
+      background: linear-gradient(135deg, rgba(31, 111, 235, 0.18), rgba(188, 140, 255, 0.18));
+      border: 1px solid rgba(88, 166, 255, 0.35);
       border-radius: var(--radius);
       padding: 24px;
       display: flex;
       flex-direction: column;
-      gap: 16px;
+      gap: 18px;
     }
 
     .rotation-controls {
@@ -128,42 +128,61 @@
     .btn-rotate-main {
       background: linear-gradient(135deg, #1f6feb, #8957e5);
       color: #fff;
-      font-size: 1.05rem;
-      font-weight: 600;
-      padding: 14px 28px;
+      font-size: 1.1rem;
+      font-weight: 700;
+      padding: 16px 32px;
       border-radius: 10px;
       border: none;
       cursor: pointer;
-      box-shadow: 0 4px 14px rgba(31, 111, 235, 0.4);
+      box-shadow: 0 4px 16px rgba(31, 111, 235, 0.45);
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 12px;
       transition: all 0.2s;
     }
     .btn-rotate-main:hover {
       transform: translateY(-2px);
-      box-shadow: 0 6px 20px rgba(137, 87, 229, 0.5);
+      box-shadow: 0 6px 24px rgba(137, 87, 229, 0.6);
     }
     .btn-rotate-main:active { transform: translateY(0); }
 
     .stats-strip {
       display: flex;
       flex-wrap: wrap;
-      gap: 16px;
+      gap: 14px;
     }
 
     .stat-pill {
-      background: rgba(0, 0, 0, 0.3);
+      background: rgba(0, 0, 0, 0.35);
       border: 1px solid rgba(255, 255, 255, 0.08);
-      padding: 8px 14px;
+      padding: 10px 16px;
       border-radius: 8px;
       font-size: 0.85rem;
       display: flex;
       flex-direction: column;
-      gap: 2px;
+      gap: 3px;
     }
     .stat-pill span { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; }
-    .stat-pill strong { font-size: 1rem; color: var(--text); }
+    .stat-pill strong { font-size: 1.05rem; color: var(--text); }
+
+    .webhook-box {
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 0.85rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .webhook-box code {
+      font-family: monospace;
+      color: var(--accent);
+      background: rgba(88, 166, 255, 0.1);
+      padding: 4px 8px;
+      border-radius: 4px;
+    }
 
     .grid-2 {
       display: grid;
@@ -328,7 +347,7 @@
         <div class="logo-icon">📡</div>
         <div class="title-area">
           <h1>ZTE K12 Smart Tower Rotator</h1>
-          <p id="device-info">Kyivstar LTE | Автоматична ротація сот та IP</p>
+          <p id="device-info">Kyivstar LTE | On-Demand Ротація Сот та IP</p>
         </div>
       </div>
       <div class="status-badge">
@@ -337,19 +356,19 @@
       </div>
     </header>
 
-    <!-- Rotation Hero Section -->
+    <!-- On-Demand Rotation Section -->
     <section class="rotation-hero">
       <div class="rotation-controls">
         <div>
           <button class="btn-rotate-main" id="btn-rotate-now" onclick="rotateToNextFreshTower()">
-            ⚡ РОТУВАТИ НА НАСТУПНУ НОВУ ВИШКУ
+            ⚡ РОТУВАТИ НА НАСТУПНУ ВИШКУ (ПО ТРИГЕРУ)
           </button>
-          <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 6px;">
-            Автоматично вибирає вишку/сектор, який ще не використовувався (або використовувався найдавніше).
+          <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 6px;">
+            Натискайте після завершення операцій: перемикає на наступну свіжу соту та оновлює IP.
           </div>
         </div>
 
-        <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="display: flex; flex-direction: column; gap: 8px;">
           <div style="display: flex; align-items: center; gap: 8px;">
             <label style="font-size: 0.85rem; color: var(--text-muted);">Стратегія ротації:</label>
             <select id="select-strategy" style="padding: 6px 10px; font-size: 0.85rem;">
@@ -357,14 +376,6 @@
               <option value="band_cycle">По колу через усі бенди (B3 -> B7 -> B8 -> B20)</option>
               <option value="least_recent">Найдавніші соти (Least Recently Used)</option>
             </select>
-          </div>
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <input type="checkbox" id="chk-auto-rotate" onchange="toggleAutoRotate(this.checked)">
-            <label for="chk-auto-rotate" style="font-size: 0.85rem; cursor: pointer;">
-              Авторотація кожні:
-            </label>
-            <input type="number" id="inp-rotate-interval" value="60" min="10" style="width: 70px; padding: 4px 8px; font-size: 0.85rem;">
-            <span style="font-size: 0.85rem; color: var(--text-muted);">сек</span>
           </div>
         </div>
       </div>
@@ -375,8 +386,8 @@
           <strong id="stat-cur-tower">--</strong>
         </div>
         <div class="stat-pill">
-          <span>Поточний IP:</span>
-          <strong id="stat-cur-ip">--</strong>
+          <span>Поточний WAN IP:</span>
+          <strong id="stat-cur-ip" style="color: var(--accent);">--</strong>
         </div>
         <div class="stat-pill">
           <span>Всього відомо вишок:</span>
@@ -384,12 +395,21 @@
         </div>
         <div class="stat-pill">
           <span>Свіжих (невикористаних):</span>
-          <strong id="stat-fresh-towers" style="color: var(--accent);">0</strong>
+          <strong id="stat-fresh-towers" style="color: var(--success-glow);">0</strong>
         </div>
         <div class="stat-pill">
-          <span>Всього ротацій:</span>
+          <span>Виконано ротацій:</span>
           <strong id="stat-rotate-count">0</strong>
         </div>
+      </div>
+
+      <!-- Webhook integration for automation -->
+      <div class="webhook-box">
+        <div>
+          <strong>🔗 Тригер через API / Скрипт:</strong>
+          <span style="color: var(--text-muted); font-size: 0.8rem; margin-left: 6px;">Викликайте з вашого софту/бота після завершення завдань:</span>
+        </div>
+        <code>curl http://127.0.0.1:8080/api/rotate</code>
       </div>
     </section>
 
@@ -517,7 +537,7 @@
             </div>
             <div class="form-group">
               <label for="cell-pci">PCI (Physical Cell ID 0-503)</label>
-              <input type="number" id="cell-pci" placeholder="напр. 167">
+              <input type="number" id="cell-pci" placeholder="напр. 166">
             </div>
           </div>
           <div class="btn-group">
@@ -554,7 +574,6 @@
     let curWanIp = "";
     let curKey = "";
     let rotationCounter = parseInt(localStorage.getItem("zte_rotation_count") || "0");
-    let autoRotateTimer = null;
     let isScanning = false;
 
     // Load tower history database from localStorage
@@ -733,13 +752,12 @@
           // Active Tower Update
           const band = data.wan_active_band || "LTE BAND 3";
           curEarfcn = data.wan_active_channel || "1500";
-          curPci = data.lte_pci || "167";
+          curPci = data.lte_pci || "166";
           const rawCell = data.cell_id || data.network_cell_id || "--";
           const enodeb = decodeEnodeb(rawCell);
 
           curKey = `${curEarfcn}_${curPci}`;
 
-          // Register in database if new or update existing
           if (!towerDatabase[curKey]) {
             towerDatabase[curKey] = {
               band: band,
@@ -784,7 +802,7 @@
 
       log("🔍 Пошук наступної невикористаної соти...");
 
-      // 1. Check if we have fresh towers in database
+      // Candidates
       const candidates = [];
       for (let k in towerDatabase) {
         if (k !== curKey) {
@@ -792,7 +810,7 @@
         }
       }
 
-      // Sort candidates: never used first, then oldest used
+      // Sort: never used first, then oldest used
       candidates.sort((a, b) => {
         const uA = a.useCount || 0;
         const uB = b.useCount || 0;
@@ -814,13 +832,13 @@
         saveTowerDatabase();
 
         btn.disabled = false;
-        btn.innerText = "⚡ РОТУВАТИ НА НАСТУПНУ НОВУ ВИШКУ";
+        btn.innerText = "⚡ РОТУВАТИ НА НАСТУПНУ ВИШКУ (ПО ТРИГЕРУ)";
         log(`✅ Успішно перемкнуто на соту ${target.band} (PCI: ${target.pci})!`);
       } else {
-        log("Немає інших відомих вишок. Запуск спектрального сканування всіх діапазонів...");
+        log("Пошук нових діапазонів навколо...");
         await scanAllBands();
         btn.disabled = false;
-        btn.innerText = "⚡ РОТУВАТИ НА НАСТУПНУ НОВУ ВИШКУ";
+        btn.innerText = "⚡ РОТУВАТИ НА НАСТУПНУ ВИШКУ (ПО ТРИГЕРУ)";
       }
     }
 
@@ -864,7 +882,7 @@
           lte_band_mask: b.mask
         });
 
-        await new Promise(r => setTimeout(r, 2200));
+        await new Promise(r => setTimeout(r, 2600));
 
         const keys = "wan_active_band,wan_active_channel,lte_pci,cell_id,network_cell_id,network_lte_rsrp,wan_ipaddr";
         const st = await apiGet(keys);
@@ -888,7 +906,7 @@
               lastUsed: 0,
               lastIp: st.wan_ipaddr || ""
             };
-            log(`[+] Виявлено нову вишку: ${b.name} (EARFCN=${earfcn}, PCI=${pci})!`);
+            log(`[+] Виявлено соту: ${b.name} (EARFCN=${earfcn}, PCI=${pci})!`);
           }
           saveTowerDatabase();
         }
@@ -905,20 +923,6 @@
       isScanning = false;
       log("✅ Сканування завершено! Усі виявлені вишки збережено.");
       setTimeout(fetchStatus, 1500);
-    }
-
-    function toggleAutoRotate(enabled) {
-      if (autoRotateTimer) {
-        clearInterval(autoRotateTimer);
-        autoRotateTimer = null;
-      }
-      if (enabled) {
-        const sec = parseInt(document.getElementById("inp-rotate-interval").value) || 60;
-        log(`Авторотація увімкнена кожні ${sec} сек.`);
-        autoRotateTimer = setInterval(rotateToNextFreshTower, sec * 1000);
-      } else {
-        log("Авторотація вимкнена.");
-      }
     }
 
     function clearHistory() {
