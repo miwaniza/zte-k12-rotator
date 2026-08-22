@@ -1,6 +1,6 @@
 [package]
 name = "zte-control"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 description = "Universal macOS / Windows / Linux Control Suite for ZTE K12 (ZX297520)"
 authors = ["Dmytro Yemelianov"]

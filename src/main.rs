@@ -9,10 +9,11 @@ use std::thread;
 use std::time::Duration;
 use tiny_http::{Header, Method, Response, Server};
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 const EMBEDDED_UI_HTML: &str = include_str!("../web/index.html");
 
 #[derive(Parser, Debug)]
-#[command(name = "zte-control", author, version, about = "Universal macOS / Windows / Linux Controller for ZTE K12 (ZX297520)")]
+#[command(name = "zte-control", author, version = VERSION, about = "Universal Controller, IP Rotator & Service for ZTE K12 (ZX297520)")]
 pub struct Cli {
     #[arg(long, default_value = "http://192.168.0.1", help = "Router base URL")]
     pub host: String,
@@ -68,6 +69,15 @@ pub enum Commands {
     /// Rotate to next LTE band and obtain a new IP address
     Rotate,
 
+    /// Check for application updates from GitHub
+    CheckUpdate,
+
+    /// Manage background Windows / macOS service
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
+    },
+
     /// Launch built-in Web Control Dashboard with automated CORS proxy
     Ui {
         #[arg(short, long, default_value_t = 8080, help = "Local HTTP server port")]
@@ -76,6 +86,18 @@ pub enum Commands {
         #[arg(long, help = "Do not automatically open browser")]
         no_open: bool,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ServiceAction {
+    /// Install as auto-starting background Windows Task / Service
+    Install,
+    /// Uninstall background Windows Task / Service
+    Uninstall,
+    /// Start background service
+    Start,
+    /// Stop background service
+    Stop,
 }
 
 #[derive(Debug, Clone)]
@@ -325,14 +347,38 @@ fn get_first_non_empty<'a>(map: &'a HashMap<String, serde_json::Value>, keys: &[
     default_val
 }
 
+pub fn check_for_updates() -> Result<(String, String, bool), String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(4))
+        .user_agent("zte-control-updater")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client
+        .get("https://api.github.com/repos/miwaniza/zte-k12-rotator/releases/latest")
+        .send()
+        .map_err(|e| format!("Failed to reach GitHub API: {}", e))?;
+
+    let json: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    let latest_tag = json
+        .get("tag_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim_start_matches('v')
+        .to_string();
+
+    let has_update = !latest_tag.is_empty() && latest_tag != VERSION;
+    Ok((VERSION.to_string(), latest_tag, has_update))
+}
+
 pub fn run_ui_server(client: Arc<ZTEClient>, port: u16, no_open: bool) {
     let server_addr = format!("0.0.0.0:{}", port);
     let server = Server::http(&server_addr).expect("Failed to start HTTP server");
 
     println!("============================================================");
-    println!("  🚀 ZTE K12 Master Web Controller & IP Rotator Started");
-    println!("  👉 URL: http://127.0.0.1:{}", port);
-    println!("  📡 Router: {}", client.base_url);
+    println!("  🚀 ZTE K12 Master Web Controller v{} Started", VERSION);
+    println!("  👉 Dashboard: http://127.0.0.1:{}", port);
+    println!("  📡 Router:    {}", client.base_url);
     println!("============================================================");
 
     if !no_open {
@@ -342,6 +388,7 @@ pub fn run_ui_server(client: Arc<ZTEClient>, port: u16, no_open: bool) {
 
     let http_client = Client::builder()
         .timeout(Duration::from_secs(5))
+        .user_agent("zte-control-server")
         .build()
         .unwrap_or_else(|_| Client::new());
 
@@ -354,8 +401,18 @@ pub fn run_ui_server(client: Arc<ZTEClient>, port: u16, no_open: bool) {
                 .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap())
                 .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
             let _ = request.respond(response);
+        } else if url_path.starts_with("/api/update/check") {
+            let json_body = match check_for_updates() {
+                Ok((current, latest, has_update)) => {
+                    format!("{{\"current\":\"{}\",\"latest\":\"{}\",\"has_update\":{}}}", current, latest, has_update)
+                }
+                Err(e) => format!("{{\"error\":\"{}\"}}", e),
+            };
+            let response = Response::from_string(json_body)
+                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap())
+                .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
+            let _ = request.respond(response);
         } else if url_path.starts_with("/api/geo") {
-            // Geolocation proxy
             let geo_data = http_client
                 .get("https://ipwho.is/")
                 .send()
@@ -405,6 +462,53 @@ pub fn run_ui_server(client: Arc<ZTEClient>, port: u16, no_open: bool) {
     }
 }
 
+fn handle_service_command(action: ServiceAction) {
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        let exe_path = std::env::current_exe().unwrap_or_default();
+        let exe_str = exe_path.to_string_lossy().to_string();
+
+        match action {
+            ServiceAction::Install => {
+                println!("[*] Registering Windows Scheduled Background Task: ZTEK12RotatorService");
+                let status = Command::new("schtasks")
+                    .args(&["/Create", "/TN", "ZTEK12RotatorService", "/TR", &format!("\"{}\" ui --no-open", exe_str), "/SC", "ONLOGON", "/RL", "HIGHEST", "/F"])
+                    .status();
+                if status.map(|s| s.success()).unwrap_or(false) {
+                    println!("[+] Successfully installed background service!");
+                    let _ = Command::new("schtasks").args(&["/Run", "/TN", "ZTEK12RotatorService"]).status();
+                    println!("[+] Service started at http://127.0.0.1:8080");
+                } else {
+                    eprintln!("[-] Failed to install service. Try running as Administrator.");
+                }
+            }
+            ServiceAction::Uninstall => {
+                println!("[*] Removing Windows Scheduled Background Task: ZTEK12RotatorService");
+                let _ = Command::new("schtasks").args(&["/End", "/TN", "ZTEK12RotatorService"]).status();
+                let _ = Command::new("schtasks").args(&["/Delete", "/TN", "ZTEK12RotatorService", "/F"]).status();
+                println!("[+] Service uninstalled.");
+            }
+            ServiceAction::Start => {
+                let _ = Command::new("schtasks").args(&["/Run", "/TN", "ZTEK12RotatorService"]).status();
+                println!("[+] Background task start requested.");
+            }
+            ServiceAction::Stop => {
+                let _ = Command::new("schtasks").args(&["/End", "/TN", "ZTEK12RotatorService"]).status();
+                println!("[+] Background task stopped.");
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        println!("[*] Service management via systemd/launchd: on macOS/Linux use standard background runner or nohup.");
+        match action {
+            ServiceAction::Install => println!("[+] Use: nohup zte-control ui --no-open >/dev/null 2>&1 &"),
+            _ => println!("[+] Action noted."),
+        }
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
     let client = Arc::new(ZTEClient::new(&cli.host, &cli.password, cli.bind_ip.as_deref()));
@@ -413,7 +517,7 @@ fn main() {
         None | Some(Commands::Status) => match client.get_status() {
             Ok(status) => {
                 println!("============================================================");
-                println!("           📡 ZTE K12 CELLULAR ROUTER STATUS");
+                println!("           📡 ZTE K12 CELLULAR ROUTER STATUS v{}", VERSION);
                 println!("============================================================");
                 let hw = get_first_non_empty(&status, &["hardware_version"], "K12HW1.0");
                 let fw = get_first_non_empty(&status, &["wa_inner_version"], "N/A");
@@ -502,6 +606,23 @@ fn main() {
         Some(Commands::Reconnect) | Some(Commands::Rotate) => {
             let _ = client.reconnect_rf();
             println!("[+] Cellular Airplane reconnect triggered. New IP requested.");
+        }
+
+        Some(Commands::CheckUpdate) => match check_for_updates() {
+            Ok((cur, latest, has_update)) => {
+                println!("Current version: v{}", cur);
+                println!("Latest release:  v{}", latest);
+                if has_update {
+                    println!("[+] 🚀 Update available! Run `irm https://raw.githubusercontent.com/miwaniza/zte-k12-rotator/main/install.ps1 | iex` to update.");
+                } else {
+                    println!("[+] You are on the latest version.");
+                }
+            }
+            Err(e) => eprintln!("[-] Error checking updates: {}", e),
+        },
+
+        Some(Commands::Service { action }) => {
+            handle_service_command(action);
         }
 
         Some(Commands::Ui { port, no_open }) => {

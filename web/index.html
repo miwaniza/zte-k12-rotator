@@ -301,8 +301,10 @@
   <header>
     <div class="header-left">
       <span>📡 ZTE K12 Mobile Controller</span>
+      <span class="header-badge">v1.0.0</span>
       <span class="header-badge">Kyivstar 4G LTE</span>
       <span class="header-badge" id="guarantee-status" style="color: var(--success-bright);">🛡️ Унікальність IP: Активна ✅</span>
+      <span id="update-badge" style="display: none; cursor: pointer; background: rgba(59, 130, 246, 0.2); border: 1px solid var(--accent); color: var(--accent); font-size: 11px; padding: 2px 8px; border-radius: 4px; font-weight: 600;" onclick="openUpdatePage()">🚀 Доступне оновлення!</span>
     </div>
     <div class="header-right">
       <div style="display: flex; align-items: center; gap: 6px;">
@@ -1109,10 +1111,31 @@
       }, 2000);
     }
 
+    async function checkForAppUpdates() {
+      try {
+        const resp = await fetch("https://api.github.com/repos/miwaniza/zte-k12-rotator/releases/latest");
+        if (resp.ok) {
+          const data = await resp.json();
+          const latest = (data.tag_name || "").replace(/^v/, "");
+          if (latest && latest !== "1.0.0") {
+            const badge = document.getElementById("update-badge");
+            badge.innerText = `🚀 Оновити до v${latest}`;
+            badge.style.display = "inline-block";
+          }
+        }
+      } catch(e){}
+    }
+
+    function openUpdatePage() {
+      window.open("https://github.com/miwaniza/zte-k12-rotator/releases/latest", "_blank");
+    }
+
     saveTowerDatabase();
     fetchStatus();
     fetchGeoLocation();
+    checkForAppUpdates();
     setInterval(fetchStatus, 3000);
+    setInterval(checkForAppUpdates, 300000);
   </script>
 </body>
 </html>

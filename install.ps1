@@ -1,5 +1,5 @@
 # ==============================================================================
-#  ZTE K12 Mobile Controller & IP Rotator - 1-Click Windows Installer
+#  ZTE K12 Mobile Controller & IP Rotator - 1-Click Windows Installer & Service
 #  Usage: irm https://raw.githubusercontent.com/miwaniza/zte-k12-rotator/main/install.ps1 | iex
 # ==============================================================================
 
@@ -40,7 +40,6 @@ try {
     Remove-Item -Path "$env:TEMP\zte_extract" -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -Path $TempZip -Force -ErrorAction SilentlyContinue
 } catch {
-    # If zip structure is flat
     Expand-Archive -Path $TempZip -DestinationPath $InstallDir -Force
     Remove-Item -Path $TempZip -Force -ErrorAction SilentlyContinue
 }
@@ -53,7 +52,27 @@ if ($UserPath -notlike "*$InstallDir*") {
     $env:PATH += ";$InstallDir"
 }
 
-# 5. Create Desktop Shortcut
+# 5. Register Windows Background Service (Scheduled Task on Logon)
+Write-Host "[*] Configuring Windows Background Service (Auto-Start on Logon)..." -ForegroundColor Cyan
+try {
+    $ExePath = "$InstallDir\zte-control.exe"
+    $TaskName = "ZTEK12RotatorService"
+    $TaskAction = "\"$ExePath\" ui --no-open"
+    
+    # Try creating elevated task, fallback to user level
+    $p = Start-Process -FilePath "schtasks" -ArgumentList "/Create /TN `"$TaskName`" /TR `"$TaskAction`" /SC ONLOGON /RL HIGHEST /F" -Wait -PassThru -NoNewWindow
+    if ($p.ExitCode -ne 0) {
+        Start-Process -FilePath "schtasks" -ArgumentList "/Create /TN `"$TaskName`" /TR `"$TaskAction`" /SC ONLOGON /F" -Wait -NoNewWindow
+    }
+    
+    # Start the service task
+    Start-Process -FilePath "schtasks" -ArgumentList "/Run /TN `"$TaskName`"" -Wait -NoNewWindow
+    Write-Host "[+] Windows Background Service registered & started!" -ForegroundColor Green
+} catch {
+    Write-Host "[!] Service registration warning: $_" -ForegroundColor Yellow
+}
+
+# 6. Create Desktop & Start Menu Shortcuts
 try {
     $WshShell = New-Object -ComObject WScript.Shell
     $DesktopPath = [Environment]::GetFolderPath("Desktop")
@@ -64,7 +83,6 @@ try {
     $Shortcut.Save()
     Write-Host "[+] Desktop Shortcut created: $DesktopPath\ZTE K12 Controller.lnk" -ForegroundColor Green
 
-    # Start Menu Shortcut
     $StartMenuPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
     $SmShortcut = $WshShell.CreateShortcut("$StartMenuPath\ZTE K12 Controller.lnk")
     $SmShortcut.TargetPath = "$InstallDir\start-dashboard.bat"
@@ -77,17 +95,13 @@ try {
 
 Write-Host ""
 Write-Host "==================================================================" -ForegroundColor Green
-Write-Host "   ✅ INSTALLATION COMPLETE!                                      " -ForegroundColor Green
+Write-Host "   ✅ INSTALLATION & SERVICE SETUP COMPLETE!                      " -ForegroundColor Green
 Write-Host "==================================================================" -ForegroundColor Green
-Write-Host "  📂 Installed at: $InstallDir" -ForegroundColor White
-Write-Host "  🚀 Launch UI:    Double-click 'ZTE K12 Controller' on Desktop" -ForegroundColor White
+Write-Host "  📂 Directory:    $InstallDir" -ForegroundColor White
+Write-Host "  ⚙️ Service:      ZTEK12RotatorService (Running in background)" -ForegroundColor White
+Write-Host "  👉 Dashboard:    http://127.0.0.1:8080" -ForegroundColor White
 Write-Host "  ⚡ CLI Command:  zte-control status  (or rotate / reconnect)" -ForegroundColor White
 Write-Host "==================================================================" -ForegroundColor Green
 Write-Host ""
 
-# Launch immediately
-$Launch = Read-Host "Start ZTE K12 Dashboard now? (Y/n)"
-if ($Launch -eq "" -or $Launch -match "^[Yy]") {
-    Write-Host "[*] Starting ZTE Controller Web Dashboard..." -ForegroundColor Cyan
-    Start-Process "$InstallDir\start-dashboard.bat"
-}
+Start-Process "http://127.0.0.1:8080"
