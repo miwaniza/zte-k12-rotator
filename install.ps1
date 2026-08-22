@@ -43,6 +43,16 @@ try {
     Remove-Item -Path $TempZip -Force -ErrorAction SilentlyContinue
 }
 
+# Create run-service.vbs if not present
+$VbsContent = @"
+Set WshShell = CreateObject("WScript.Shell")
+Set fso = CreateObject("Scripting.FileSystemObject")
+scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
+exePath = scriptDir & "\zte-control.exe"
+WshShell.Run Chr(34) & exePath & Chr(34) & " ui --no-open", 0, False
+"@
+Set-Content -Path "$InstallDir\run-service.vbs" -Value $VbsContent -Force
+
 # 4. Add to User PATH
 $UserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
 if ($UserPath -notlike "*$InstallDir*") {
@@ -51,16 +61,20 @@ if ($UserPath -notlike "*$InstallDir*") {
     $env:PATH += ";$InstallDir"
 }
 
-# 5. Register Windows Background Service (Scheduled Task on Logon)
-Write-Host "[*] Configuring Windows Background Service (Auto-Start on Logon)..." -ForegroundColor Cyan
+# 5. Register Windows Background Service (Silent VBS Task on Logon)
+Write-Host "[*] Configuring Silent Windows Background Service..." -ForegroundColor Cyan
 try {
-    $ExePath = "$InstallDir\zte-control.exe"
+    $VbsPath = "$InstallDir\run-service.vbs"
     $TaskName = "ZTEK12RotatorService"
-    $TaskAction = "'$ExePath' ui --no-open"
-    
-    Start-Process -FilePath "schtasks" -ArgumentList @("/Create", "/TN", $TaskName, "/TR", $TaskAction, "/SC", "ONLOGON", "/F") -Wait -NoNewWindow
-    Start-Process -FilePath "schtasks" -ArgumentList @("/Run", "/TN", $TaskName) -Wait -NoNewWindow
-    Write-Host "[+] Windows Background Service registered & started!" -ForegroundColor Green
+    $TrValue = "wscript.exe `"$VbsPath`""
+
+    # Execute schtasks directly
+    & schtasks /Create /TN $TaskName /TR $TrValue /SC ONLOGON /RL HIGHEST /F 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        & schtasks /Create /TN $TaskName /TR $TrValue /SC ONLOGON /F 2>$null
+    }
+    & schtasks /Run /TN $TaskName 2>$null
+    Write-Host "[+] Windows Background Service registered & started silently!" -ForegroundColor Green
 } catch {
     Write-Host "[!] Service registration notice: $_" -ForegroundColor Yellow
 }
@@ -86,12 +100,15 @@ try {
     Write-Host "[!] Could not create shortcut automatically: $_" -ForegroundColor Yellow
 }
 
+# Wait for service to initialize
+Start-Sleep -Seconds 1
+
 Write-Host ""
 Write-Host "==================================================================" -ForegroundColor Green
 Write-Host "   ✅ INSTALLATION & SERVICE SETUP COMPLETE!                      " -ForegroundColor Green
 Write-Host "==================================================================" -ForegroundColor Green
 Write-Host "  📂 Directory:    $InstallDir" -ForegroundColor White
-Write-Host "  ⚙️ Service:      ZTEK12RotatorService (Running in background)" -ForegroundColor White
+Write-Host "  ⚙️ Service:      ZTEK12RotatorService (Running silently in background)" -ForegroundColor White
 Write-Host "  👉 Dashboard:    http://127.0.0.1:8080" -ForegroundColor White
 Write-Host "  ⚡ CLI Command:  zte-control status  (or rotate / reconnect)" -ForegroundColor White
 Write-Host "==================================================================" -ForegroundColor Green
