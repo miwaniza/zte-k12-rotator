@@ -3,879 +3,583 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ZTE K12 Master Controller & IP Geo Rotator</title>
+  <title>ZTE K12 Mobile Controller</title>
   <style>
     :root {
-      --bg: #090d16;
-      --card-bg: rgba(16, 23, 38, 0.92);
-      --card-border: rgba(255, 255, 255, 0.08);
-      --text: #f0f6fc;
+      --bg: #0d1117;
+      --card-bg: #161b22;
+      --card-border: #30363d;
+      --text: #c9d1d9;
+      --text-bright: #f0f6fc;
       --text-muted: #8b949e;
       --accent: #58a6ff;
       --accent-hover: #1f6feb;
-      --accent-glow: rgba(88, 166, 255, 0.3);
       --success: #238636;
-      --success-glow: #2ea043;
+      --success-bright: #3fb950;
       --warning: #d29922;
-      --danger: #da3633;
+      --danger: #f85149;
       --purple: #bc8cff;
-      --radius: 14px;
-      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace, sans-serif;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
-    body {
+    html, body {
+      height: 100vh;
+      max-height: 100vh;
+      overflow: hidden;
       font-family: var(--font);
       background-color: var(--bg);
-      background-image: 
-        radial-gradient(circle at 50% 0%, rgba(88, 166, 255, 0.15) 0%, transparent 65%),
-        radial-gradient(circle at 10% 30%, rgba(188, 140, 255, 0.08) 0%, transparent 50%);
       color: var(--text);
-      min-height: 100vh;
-      padding: 24px 16px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
+      font-size: 13px;
     }
 
-    .container {
-      width: 100%;
-      max-width: 1160px;
+    body {
       display: flex;
       flex-direction: column;
-      gap: 20px;
+      padding: 8px 12px;
+      gap: 8px;
     }
 
+    /* Custom Slim Scrollbars */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.2); }
+    ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #58a6ff; }
+
+    /* Compact Header Bar */
     header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 18px 24px;
       background: var(--card-bg);
-      backdrop-filter: blur(16px);
       border: 1px solid var(--card-border);
-      border-radius: var(--radius);
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-    }
-
-    .logo-group { display: flex; align-items: center; gap: 14px; }
-    .logo-icon {
-      width: 42px; height: 42px;
-      background: linear-gradient(135deg, #1f6feb, #bc8cff);
-      border-radius: 12px;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 22px;
-      box-shadow: 0 4px 12px rgba(31, 111, 235, 0.35);
-    }
-
-    .title-area h1 { font-size: 1.3rem; font-weight: 700; }
-    .title-area p { font-size: 0.8rem; color: var(--text-muted); margin-top: 2px; }
-
-    .status-badge {
-      display: flex; align-items: center; gap: 8px;
-      padding: 6px 16px; border-radius: 20px;
-      font-size: 0.85rem; font-weight: 600;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid var(--card-border);
-    }
-
-    .dot {
-      width: 9px; height: 9px; border-radius: 50%;
-      background: var(--danger);
-      box-shadow: 0 0 8px var(--danger);
-      transition: all 0.3s;
-    }
-    .dot.online {
-      background: var(--success-glow);
-      box-shadow: 0 0 10px var(--success-glow);
-    }
-
-    .card {
-      background: var(--card-bg);
-      backdrop-filter: blur(16px);
-      border: 1px solid var(--card-border);
-      border-radius: var(--radius);
-      padding: 22px;
-      display: flex;
-      flex-direction: column;
-      gap: 18px;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
-    }
-
-    .card-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-      padding-bottom: 14px;
-    }
-    .card-header h2 { font-size: 1.1rem; font-weight: 600; display: flex; align-items: center; gap: 10px; }
-
-    /* Controls Hero Banner */
-    .hero-panel {
-      background: linear-gradient(135deg, rgba(31, 111, 235, 0.25), rgba(35, 134, 54, 0.2));
-      border: 1px solid rgba(88, 166, 255, 0.4);
-      border-radius: var(--radius);
-      padding: 24px;
-      display: flex;
-      flex-direction: column;
-      gap: 18px;
-      box-shadow: 0 8px 32px rgba(31, 111, 235, 0.2);
-    }
-
-    .hero-actions {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-      gap: 14px;
-    }
-
-    .action-group-left {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 12px;
-    }
-
-    .btn-airplane-main {
-      background: linear-gradient(135deg, #1f6feb, #238636);
-      color: #fff;
-      font-size: 1.05rem;
-      font-weight: 700;
-      padding: 14px 28px;
-      border-radius: 12px;
-      border: none;
-      cursor: pointer;
-      box-shadow: 0 4px 20px rgba(35, 134, 54, 0.45);
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      transition: all 0.2s;
-    }
-    .btn-airplane-main:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 6px 28px rgba(35, 134, 54, 0.6);
-    }
-
-    .btn-rotate-next {
-      background: linear-gradient(135deg, #8957e5, #1f6feb);
-      color: #fff;
-      font-size: 1.05rem;
-      font-weight: 700;
-      padding: 14px 28px;
-      border-radius: 12px;
-      border: none;
-      cursor: pointer;
-      box-shadow: 0 4px 18px rgba(137, 87, 229, 0.4);
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      transition: all 0.2s;
-    }
-    .btn-rotate-next:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 6px 24px rgba(137, 87, 229, 0.6);
-    }
-
-    .stats-strip {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-    }
-
-    .stat-pill {
-      background: rgba(0, 0, 0, 0.4);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      padding: 10px 16px;
-      border-radius: 10px;
-      font-size: 0.85rem;
-      display: flex;
-      flex-direction: column;
-      gap: 3px;
-      flex: 1;
-      min-width: 140px;
-    }
-    .stat-pill span { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
-    .stat-pill strong { font-size: 1.05rem; color: var(--text); }
-
-    /* Geo Location Card */
-    .geo-hero {
-      background: linear-gradient(135deg, rgba(88, 166, 255, 0.15), rgba(188, 140, 255, 0.15));
-      border: 1px solid rgba(88, 166, 255, 0.3);
-      border-radius: var(--radius);
-      padding: 20px 24px;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
-    }
-
-    .geo-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-      gap: 14px;
-    }
-
-    .geo-item {
-      background: rgba(0, 0, 0, 0.35);
-      border: 1px solid rgba(255, 255, 255, 0.06);
-      border-radius: 10px;
-      padding: 12px 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-    .geo-item span { font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
-    .geo-item strong { font-size: 1.05rem; color: var(--text); display: flex; align-items: center; gap: 8px; }
-
-    .ip-display-box {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      background: rgba(0, 0, 0, 0.45);
-      border: 1px solid rgba(88, 166, 255, 0.35);
-      border-radius: 10px;
-      padding: 12px 18px;
-    }
-    .ip-text-large {
-      font-size: 1.45rem;
-      font-weight: 800;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      color: var(--accent);
-      letter-spacing: 0.5px;
-    }
-
-    .webhook-box {
-      background: rgba(0, 0, 0, 0.45);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      border-radius: 10px;
-      padding: 12px 18px;
-      font-size: 0.85rem;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-    }
-    .webhook-box code {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      color: var(--accent);
-      background: rgba(88, 166, 255, 0.12);
-      padding: 5px 10px;
       border-radius: 6px;
-      user-select: all;
-    }
-
-    /* Live Scan Progress Panel */
-    .scan-progress-panel {
-      background: rgba(0, 0, 0, 0.45);
-      border: 1px solid rgba(88, 166, 255, 0.3);
-      border-radius: 12px;
-      padding: 16px 20px;
-      display: none;
-      flex-direction: column;
-      gap: 12px;
-    }
-    .scan-progress-panel.active { display: flex; }
-
-    .progress-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 0.9rem;
-      font-weight: 600;
-    }
-
-    .progress-bar-bg {
-      width: 100%;
-      height: 10px;
-      background: rgba(255, 255, 255, 0.08);
-      border-radius: 5px;
-      overflow: hidden;
-    }
-    .progress-bar-fill {
-      height: 100%;
-      width: 0%;
-      background: linear-gradient(90deg, #1f6feb, #2ea043, #bc8cff);
-      transition: width 0.3s ease;
-      box-shadow: 0 0 10px rgba(88, 166, 255, 0.5);
-    }
-
-    /* Grouping Tabs & Search */
-    .filter-bar {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      background: rgba(0, 0, 0, 0.25);
-      padding: 12px 16px;
-      border-radius: 10px;
-      border: 1px solid var(--card-border);
-    }
-
-    .tab-group {
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-    }
-
-    .tab-btn {
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid var(--card-border);
-      color: var(--text-muted);
-      padding: 6px 14px;
-      border-radius: 20px;
-      font-size: 0.8rem;
-      font-weight: 500;
-      cursor: pointer;
-      transition: all 0.2s;
-    }
-    .tab-btn:hover { background: rgba(255, 255, 255, 0.1); color: var(--text); }
-    .tab-btn.active {
-      background: var(--accent);
-      color: #fff;
-      border-color: var(--accent);
-      box-shadow: 0 2px 8px var(--accent-glow);
-    }
-
-    .search-input {
-      background: rgba(0, 0, 0, 0.4);
-      border: 1px solid var(--card-border);
-      border-radius: 8px;
       padding: 6px 12px;
-      color: var(--text);
-      font-size: 0.85rem;
-      outline: none;
-      width: 220px;
+      height: 36px;
+      flex-shrink: 0;
     }
-    .search-input:focus { border-color: var(--accent); }
 
-    /* Signal Meters */
-    .signal-meter {
-      display: inline-flex;
-      align-items: flex-end;
-      gap: 2px;
-      height: 16px;
-      vertical-align: middle;
-      margin-right: 6px;
-    }
-    .sig-bar {
-      width: 3px;
-      background: rgba(255, 255, 255, 0.15);
-      border-radius: 1px;
-    }
-    .sig-bar:nth-child(1) { height: 4px; }
-    .sig-bar:nth-child(2) { height: 8px; }
-    .sig-bar:nth-child(3) { height: 12px; }
-    .sig-bar:nth-child(4) { height: 16px; }
+    .header-left { display: flex; align-items: center; gap: 10px; font-weight: 600; color: var(--text-bright); }
+    .header-badge { font-size: 11px; padding: 2px 8px; border-radius: 4px; background: #21262d; border: 1px solid var(--card-border); color: var(--text-muted); }
+    .header-right { display: flex; align-items: center; gap: 12px; font-size: 12px; }
 
-    .sig-4 .sig-bar { background: var(--success-glow); }
-    .sig-3 .sig-bar:nth-child(-n+3) { background: var(--success-glow); }
-    .sig-2 .sig-bar:nth-child(-n+2) { background: var(--warning); }
-    .sig-1 .sig-bar:nth-child(1) { background: var(--danger); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); display: inline-block; }
+    .dot.online { background: var(--success-bright); box-shadow: 0 0 6px var(--success-bright); }
 
-    /* Tower Table */
-    .tower-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.85rem;
-    }
-    .tower-table th {
-      text-align: left;
-      padding: 12px 14px;
-      color: var(--text-muted);
-      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-      font-weight: 600;
-      font-size: 0.75rem;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    .tower-table td {
-      padding: 14px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-      vertical-align: middle;
-    }
-    .tower-row { transition: background 0.2s; }
-    .tower-row:hover { background: rgba(255, 255, 255, 0.03); }
-
-    .badge-active {
-      background: rgba(46, 160, 67, 0.2);
-      color: var(--success-glow);
-      border: 1px solid rgba(46, 160, 67, 0.4);
-      padding: 4px 10px;
-      border-radius: 12px;
-      font-size: 0.75rem;
-      font-weight: 600;
-      display: inline-flex;
+    /* Dense Control & Stats Strip */
+    .top-strip {
+      display: flex;
+      flex-wrap: wrap;
       align-items: center;
-      gap: 6px;
-    }
-
-    .badge-fresh {
-      background: rgba(88, 166, 255, 0.15);
-      color: var(--accent);
-      border: 1px solid rgba(88, 166, 255, 0.3);
-      padding: 4px 10px;
-      border-radius: 12px;
-      font-size: 0.75rem;
-      font-weight: 600;
-    }
-
-    .badge-used {
-      background: rgba(210, 153, 34, 0.15);
-      color: var(--warning);
-      border: 1px solid rgba(210, 153, 34, 0.3);
-      padding: 4px 10px;
-      border-radius: 12px;
-      font-size: 0.75rem;
-      font-weight: 600;
-    }
-
-    .add-tower-form {
-      display: grid;
-      grid-template-columns: 2fr 1.5fr 1fr 1fr auto;
-      gap: 12px;
-      align-items: flex-end;
-      background: rgba(0, 0, 0, 0.3);
-      padding: 16px;
-      border-radius: 10px;
+      justify-content: space-between;
+      gap: 8px;
+      background: var(--card-bg);
       border: 1px solid var(--card-border);
+      border-radius: 6px;
+      padding: 6px 12px;
+      flex-shrink: 0;
     }
 
-    .form-group { display: flex; flex-direction: column; gap: 6px; }
-    .form-group label { font-size: 0.75rem; color: var(--text-muted); }
-
-    input[type="text"], input[type="number"], select {
-      background: rgba(0, 0, 0, 0.4);
-      border: 1px solid var(--card-border);
-      border-radius: 8px;
-      padding: 9px 12px;
-      color: var(--text);
-      font-size: 0.85rem;
-      outline: none;
-    }
-    input:focus, select:focus { border-color: var(--accent); }
+    .action-buttons { display: flex; align-items: center; gap: 6px; }
 
     button {
-      background: var(--accent); color: #fff;
-      border: none; border-radius: 8px;
-      padding: 9px 16px; font-size: 0.85rem; font-weight: 600;
-      cursor: pointer; display: flex; align-items: center; justify-content: center;
-      gap: 8px; transition: all 0.2s;
-    }
-    button:hover { background: var(--accent-hover); }
-    button.btn-secondary { background: rgba(255, 255, 255, 0.08); border: 1px solid var(--card-border); color: var(--text); }
-    button.btn-secondary:hover { background: rgba(255, 255, 255, 0.15); }
-    button.btn-success { background: var(--success); }
-    button.btn-success:hover { background: #2ea043; }
-    button.btn-danger { background: var(--danger); }
-    button.btn-danger:hover { background: #b62324; }
-    button.btn-sm { padding: 5px 12px; font-size: 0.75rem; border-radius: 6px; }
-
-    .grid-2 {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
-      gap: 20px;
-    }
-
-    .metrics-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 12px;
-    }
-
-    .metric-box {
-      background: rgba(0, 0, 0, 0.3);
-      border: 1px solid rgba(255, 255, 255, 0.05);
-      border-radius: 10px;
-      padding: 14px;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-    .metric-label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
-    .metric-value { font-size: 1.4rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-    .metric-sub { font-size: 0.75rem; color: var(--text-muted); }
-
-    .band-chips {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 10px;
-    }
-
-    .band-chip {
-      display: flex; align-items: center; gap: 12px;
-      background: rgba(0, 0, 0, 0.3);
+      background: #21262d;
+      color: var(--text-bright);
       border: 1px solid var(--card-border);
-      border-radius: 10px;
-      padding: 12px 16px;
+      border-radius: 4px;
+      padding: 5px 12px;
+      font-size: 12px;
+      font-weight: 600;
       cursor: pointer;
-      user-select: none;
-      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+      transition: background 0.15s, border-color 0.15s;
     }
-    .band-chip:hover {
-      background: rgba(88, 166, 255, 0.1);
-      border-color: var(--accent);
-    }
-    .band-chip input { accent-color: var(--accent); width: 18px; height: 18px; }
-    .band-chip-label strong { display: block; font-size: 0.85rem; }
-    .band-chip-label span { font-size: 0.75rem; color: var(--text-muted); }
+    button:hover { background: #30363d; border-color: #8b949e; }
+    button:active { background: #161b22; }
+    button.btn-primary { background: #238636; border-color: rgba(240, 246, 252, 0.1); color: #fff; }
+    button.btn-primary:hover { background: #2ea043; }
+    button.btn-purple { background: #6e40c9; border-color: rgba(240, 246, 252, 0.1); color: #fff; }
+    button.btn-purple:hover { background: #8957e5; }
+    button.btn-sm { padding: 3px 8px; font-size: 11px; }
 
-    #log-toast {
-      padding: 12px 18px;
-      background: rgba(0, 0, 0, 0.75);
+    .stats-inline { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+    .stat-tag {
+      background: #0d1117;
       border: 1px solid var(--card-border);
-      border-radius: 8px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 0.82rem;
-      color: var(--accent);
-      min-height: 24px;
+      padding: 3px 8px;
+      border-radius: 4px;
       display: flex;
       align-items: center;
+      gap: 5px;
+    }
+    .stat-tag span { color: var(--text-muted); font-size: 11px; }
+    .stat-tag strong { color: var(--text-bright); font-family: ui-monospace, SFMono-Regular, monospace; }
+
+    /* Main Screen Split (Fit 100vh) */
+    .main-grid {
+      display: grid;
+      grid-template-columns: 1fr 340px;
       gap: 8px;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .panel {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 10px;
+      background: #1c2128;
+      border-bottom: 1px solid var(--card-border);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-bright);
+      flex-shrink: 0;
+    }
+
+    /* Left Column: Tower Catalog Table & Scan */
+    .catalog-controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      padding: 6px 10px;
+      background: #161b22;
+      border-bottom: 1px solid var(--card-border);
+      flex-shrink: 0;
+    }
+
+    .tab-bar { display: flex; gap: 4px; }
+    .tab-btn {
+      background: #21262d;
+      border: 1px solid var(--card-border);
+      color: var(--text-muted);
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .tab-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+
+    .search-box {
+      background: #0d1117;
+      border: 1px solid var(--card-border);
+      border-radius: 4px;
+      padding: 3px 8px;
+      color: var(--text-bright);
+      font-size: 11px;
+      outline: none;
+      width: 140px;
+    }
+
+    .table-container {
+      flex: 1;
+      overflow-y: auto;
+      min-height: 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11.5px;
+      text-align: left;
+    }
+
+    thead th {
+      position: sticky;
+      top: 0;
+      background: #1c2128;
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 11px;
+      padding: 5px 8px;
+      border-bottom: 1px solid var(--card-border);
+      z-index: 2;
+      white-space: nowrap;
+    }
+
+    tbody td {
+      padding: 5px 8px;
+      border-bottom: 1px solid #21262d;
+      white-space: nowrap;
+    }
+
+    tbody tr:hover { background: #1f242c; }
+    tbody tr.active-row { background: rgba(59, 130, 246, 0.12); }
+
+    .tag-active { color: var(--success-bright); font-weight: 600; font-size: 11px; }
+    .tag-fresh { color: var(--accent); font-size: 11px; }
+    .tag-used { color: var(--warning); font-size: 11px; }
+
+    /* Add Row Form */
+    .add-row {
+      display: grid;
+      grid-template-columns: 1.5fr 1fr 1fr 1fr auto;
+      gap: 6px;
+      padding: 6px 10px;
+      background: #161b22;
+      border-top: 1px solid var(--card-border);
+      flex-shrink: 0;
+    }
+    .add-row input, .add-row select {
+      background: #0d1117;
+      border: 1px solid var(--card-border);
+      border-radius: 4px;
+      padding: 3px 6px;
+      color: var(--text-bright);
+      font-size: 11px;
+      outline: none;
+    }
+
+    /* Right Column: Geo-IP, Telemetry & History */
+    .right-column {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .geo-panel-content {
+      padding: 8px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 11.5px;
+      flex-shrink: 0;
+    }
+
+    .geo-ip-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #0d1117;
+      border: 1px solid var(--card-border);
+      border-radius: 4px;
+      padding: 5px 8px;
+    }
+    .ip-val { font-family: monospace; font-size: 13px; font-weight: 700; color: var(--accent); }
+
+    .geo-details-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px 8px;
+    }
+    .geo-cell span { color: var(--text-muted); font-size: 10.5px; display: block; }
+    .geo-cell strong { color: var(--text-bright); font-size: 11.5px; }
+
+    /* Radio Metrics Grid */
+    .metrics-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 4px;
+      padding: 8px 10px;
+      background: #161b22;
+      border-bottom: 1px solid var(--card-border);
+      flex-shrink: 0;
+    }
+    .metric-box {
+      background: #0d1117;
+      border: 1px solid var(--card-border);
+      border-radius: 4px;
+      padding: 4px 6px;
+      text-align: center;
+    }
+    .metric-box span { font-size: 10px; color: var(--text-muted); display: block; }
+    .metric-box strong { font-size: 12px; color: var(--text-bright); font-family: monospace; }
+
+    /* Band Locks row */
+    .band-lock-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 10px;
+      font-size: 11px;
+      background: #161b22;
+      border-bottom: 1px solid var(--card-border);
+      flex-shrink: 0;
+    }
+    .band-lock-row label { display: flex; align-items: center; gap: 4px; cursor: pointer; color: var(--text); }
+    .band-lock-row input { accent-color: var(--accent); }
+
+    /* History Log (Scrollable) */
+    .history-container {
+      flex: 1;
+      overflow-y: auto;
+      min-height: 0;
+    }
+
+    /* Live Scan Banner */
+    .scan-banner {
+      display: none;
+      background: #1c2128;
+      border: 1px solid var(--accent);
+      padding: 6px 10px;
+      font-size: 11px;
+      gap: 6px;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    .scan-banner.active { display: flex; }
+    .scan-bar-fill { height: 4px; background: var(--accent); width: 0%; border-radius: 2px; transition: width 0.2s; }
+
+    /* Footer Toast */
+    footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      padding: 4px 10px;
+      height: 24px;
+      font-size: 11px;
+      font-family: monospace;
+      color: var(--text-muted);
+      flex-shrink: 0;
     }
   </style>
 </head>
 <body>
-  <div class="container">
-    <header>
-      <div class="logo-group">
-        <div class="logo-icon">📡</div>
-        <div class="title-area">
-          <h1>ZTE K12 Master Controller & IP Geo Rotator</h1>
-          <p id="device-info">Kyivstar 4G LTE | Повний Каталог Вишок, Geo-IP та Airplane Reconnect</p>
-        </div>
+  <!-- Header Bar -->
+  <header>
+    <div class="header-left">
+      <span>📡 ZTE K12 Mobile Controller</span>
+      <span class="header-badge">Kyivstar 4G LTE</span>
+      <span class="header-badge" id="head-sim-state">SIM: Active</span>
+    </div>
+    <div class="header-right">
+      <div style="display: flex; align-items: center; gap: 6px;">
+        <span class="dot online" id="status-dot"></span>
+        <span id="status-text" style="font-weight: 600;">Підключено</span>
       </div>
-      <div class="status-badge">
-        <div class="dot" id="status-dot"></div>
-        <span id="status-text">Підключення...</span>
+      <button class="btn-sm" onclick="fetchStatus()">🔄</button>
+    </div>
+  </header>
+
+  <!-- Dense Top Strip: Actions & Primary Stats -->
+  <div class="top-strip">
+    <div class="action-buttons">
+      <button class="btn-primary" id="btn-airplane" onclick="triggerAirplaneReconnect()" title="Миттєве скидання радіосесії та новий IP">
+        ✈️ Airplane Reconnect
+      </button>
+      <button class="btn-purple" id="btn-rotate-next" onclick="triggerNextTowerRotation()" title="Перемикання частоти B3 ⇄ B8">
+        ⚡ Ротувати вишку (Band-Hop)
+      </button>
+      <button class="btn-sm" onclick="restoreFullAuto()" title="Скинути всі локи в режим Auto">
+        🔄 Авто
+      </button>
+      <button class="btn-sm" onclick="discoverAllSectors()" title="Сканування B3, B7, B8, B20">
+        🔍 Сканувати
+      </button>
+    </div>
+
+    <div class="stats-inline">
+      <div class="stat-tag">
+        <span>WAN:</span> <strong id="stat-wan-ip" style="color: var(--accent);">--</strong>
       </div>
-    </header>
-
-    <!-- Unified Master Control Hero Banner -->
-    <section class="hero-panel">
-      <div class="hero-actions">
-        <div class="action-group-left">
-          <button class="btn-airplane-main" id="btn-airplane" onclick="triggerAirplaneReconnect()">
-            ✈️ AIRPLANE RECONNECT (ЯК НА IPHONE)
-          </button>
-          <button class="btn-rotate-next" id="btn-rotate-next" onclick="triggerNextTowerRotation()">
-            ⚡ РОТУВАТИ НА НАСТУПНУ ВИШКУ (ПО ТРИГЕРУ)
-          </button>
-        </div>
-
-        <div style="display: flex; gap: 8px;">
-          <button class="btn-secondary" onclick="restoreFullAuto()">
-            🔄 Скинути в Авто
-          </button>
-          <button class="btn-secondary" onclick="fetchGeoLocation()">
-            🌍 Оновити Geo IP
-          </button>
-        </div>
+      <div class="stat-tag">
+        <span>Публічний IP:</span> <strong id="stat-pub-ip" style="color: var(--success-bright);">--</strong>
       </div>
-
-      <div class="stats-strip">
-        <div class="stat-pill">
-          <span>Поточний WAN IP:</span>
-          <strong id="stat-cur-ip" style="color: var(--success-glow); font-size: 1.15rem;">--</strong>
-        </div>
-        <div class="stat-pill">
-          <span>Поточна вишка:</span>
-          <strong id="stat-cur-tower">--</strong>
-        </div>
-        <div class="stat-pill">
-          <span>EARFCN / PCI:</span>
-          <strong id="stat-cur-pci">--</strong>
-        </div>
-        <div class="stat-pill">
-          <span>Всього в списку:</span>
-          <strong id="stat-total-towers">0</strong>
-        </div>
-        <div class="stat-pill">
-          <span>Свіжих (0р):</span>
-          <strong id="stat-fresh-towers" style="color: var(--accent);">0</strong>
-        </div>
-        <div class="stat-pill">
-          <span>Виконано ротацій:</span>
-          <strong id="stat-rotate-count">0</strong>
-        </div>
+      <div class="stat-tag">
+        <span>Вишка:</span> <strong id="stat-cur-band">--</strong>
       </div>
-
-      <div class="webhook-box">
-        <div>
-          <strong>🔗 API-тригер для скриптів / ботів:</strong>
-          <span style="color: var(--text-muted); font-size: 0.8rem; margin-left: 6px;">Викликайте для ротації або оновлення IP:</span>
-        </div>
-        <code>curl http://127.0.0.1:8080/api/reconnect</code>
+      <div class="stat-tag">
+        <span>EARFCN/PCI:</span> <strong id="stat-cur-pci">--</strong>
       </div>
-
-      <!-- Live Scan Progress Panel -->
-      <div class="scan-progress-panel" id="scan-panel">
-        <div class="progress-header">
-          <span id="scan-status-text">🔍 Сканування радіоефіру...</span>
-          <span id="scan-pct-text">0%</span>
-        </div>
-        <div class="progress-bar-bg">
-          <div class="progress-bar-fill" id="scan-progress-fill"></div>
-        </div>
-        <div id="scan-detail-text" style="font-size: 0.8rem; color: var(--text-muted); font-family: monospace;">Ініціалізація...</div>
+      <div class="stat-tag">
+        <span>Ротацій:</span> <strong id="stat-rotate-count">0</strong>
       </div>
-    </section>
+    </div>
+  </div>
 
-    <!-- Public IP & Geolocation Card -->
-    <section class="geo-hero">
-      <div style="display: flex; justify-content: space-between; align-items: center;">
-        <h2 style="font-size: 1.15rem; font-weight: 700; display: flex; align-items: center; gap: 10px;">
-          🌍 Публічний IP та Геолокація (Geo-IP)
-        </h2>
-        <span id="geo-status-badge" style="font-size: 0.8rem; color: var(--success-glow); background: rgba(46, 160, 67, 0.15); padding: 3px 10px; border-radius: 12px; border: 1px solid rgba(46, 160, 67, 0.3);">
-          🟢 Оновлено
-        </span>
-      </div>
+  <!-- Live Scan Progress Strip (Shown only while scanning) -->
+  <div class="scan-banner" id="scan-panel">
+    <span id="scan-status-text" style="font-weight: 600; color: var(--accent);">🔍 Сканування...</span>
+    <div style="flex: 1; background: #0d1117; height: 4px; border-radius: 2px; overflow: hidden;">
+      <div class="scan-bar-fill" id="scan-progress-fill"></div>
+    </div>
+    <span id="scan-pct-text" style="font-family: monospace;">0%</span>
+  </div>
 
-      <div class="ip-display-box">
-        <div>
-          <span style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; display: block; margin-bottom: 2px;">
-            Публічна IP-адреса (Зовнішній IPv4)
-          </span>
-          <span class="ip-text-large" id="geo-public-ip">--.--.--.--</span>
-        </div>
-        <button class="btn-secondary btn-sm" onclick="copyPublicIp()">📋 Скопіювати IP</button>
-      </div>
-
-      <div class="geo-grid">
-        <div class="geo-item">
-          <span>Країна & Прапор</span>
-          <strong id="geo-country">🇺🇦 Україна</strong>
-        </div>
-        <div class="geo-item">
-          <span>Регіон / Область</span>
-          <strong id="geo-region">--</strong>
-        </div>
-        <div class="geo-item">
-          <span>Місто</span>
-          <strong id="geo-city">--</strong>
-        </div>
-        <div class="geo-item">
-          <span>Провайдер (ISP) & Організація</span>
-          <strong id="geo-isp" style="color: var(--accent);">Kyivstar PJSC</strong>
-        </div>
-        <div class="geo-item">
-          <span>Номер автономної системи (ASN)</span>
-          <strong id="geo-asn">AS15895</strong>
-        </div>
-        <div class="geo-item">
-          <span>Координати (Широта / Довгота)</span>
-          <strong id="geo-coords">
-            <span id="geo-coords-text">--</span>
-            <a id="geo-map-link" href="#" target="_blank" style="color: var(--accent); font-size: 0.8rem; text-decoration: underline; margin-left: 6px; display: none;">🗺️ Карта</a>
-          </strong>
-        </div>
-        <div class="geo-item">
-          <span>Часовий пояс</span>
-          <strong id="geo-timezone">Europe/Kyiv (GMT+3)</strong>
-        </div>
-        <div class="geo-item">
-          <span>Тип підключення</span>
-          <strong id="geo-conn-type" style="color: var(--purple);">Cellular 4G LTE</strong>
-        </div>
-      </div>
-    </section>
-
-    <!-- Master Tower Selector & Discovery Matrix -->
-    <section class="card">
-      <div class="card-header">
-        <h2>🗼 Каталог вишок та секторів (Обирайте з десятків доступних)</h2>
-        <div style="display: flex; gap: 8px;">
-          <button class="btn-sm" style="background: linear-gradient(135deg, #1f6feb, #238636);" onclick="discoverAllSectors()">
-            🔍 Глибокий пошук секторів (B3, B7, B8, B20)
-          </button>
-          <button class="btn-secondary btn-sm" onclick="populateKnownPresets()">📥 Завантажити пресети</button>
-          <button class="btn-secondary btn-sm" onclick="clearHistory()">🗑️ Очистити</button>
-          <button class="btn-secondary btn-sm" onclick="fetchStatus()">🔄 Оновити</button>
+  <!-- Main 2-Column Full Screen Layout -->
+  <div class="main-grid">
+    <!-- Left Column: Master Tower Catalog (Scrollable) -->
+    <div class="panel">
+      <div class="panel-header">
+        <span>🗼 Каталог доступних вишок та секторів</span>
+        <div style="display: flex; gap: 6px;">
+          <button class="btn-sm" onclick="populateKnownPresets()">📥 Пресети</button>
+          <button class="btn-sm" onclick="clearHistory()">🗑️ Очистити</button>
         </div>
       </div>
 
-      <!-- Grouping & Filter Tabs -->
-      <div class="filter-bar">
-        <div class="tab-group" id="group-tabs">
-          <button class="tab-btn active" onclick="setFilterGroup('all')">Всі (Всі частоти)</button>
-          <button class="tab-btn" onclick="setFilterGroup('b3')">Band 3 (1800 МГц)</button>
-          <button class="tab-btn" onclick="setFilterGroup('b7')">Band 7 (2600 МГц)</button>
-          <button class="tab-btn" onclick="setFilterGroup('b8')">Band 8 (900 МГц)</button>
-          <button class="tab-btn" onclick="setFilterGroup('b20')">Band 20 (800 МГц)</button>
-          <button class="tab-btn" onclick="setFilterGroup('fresh')">Тільки свіжі (0р)</button>
-          <button class="tab-btn" onclick="setFilterGroup('pool')">Тільки в пулі ☑️</button>
+      <!-- Filter Bar -->
+      <div class="catalog-controls">
+        <div class="tab-bar" id="group-tabs">
+          <button class="tab-btn active" onclick="setFilterGroup('all')">Всі</button>
+          <button class="tab-btn" onclick="setFilterGroup('b3')">B3 (1800)</button>
+          <button class="tab-btn" onclick="setFilterGroup('b8')">B8 (900)</button>
+          <button class="tab-btn" onclick="setFilterGroup('b7')">B7 (2600)</button>
+          <button class="tab-btn" onclick="setFilterGroup('b20')">B20 (800)</button>
+          <button class="tab-btn" onclick="setFilterGroup('fresh')">Свіжі (0р)</button>
+          <button class="tab-btn" onclick="setFilterGroup('pool')">Пул ☑️</button>
         </div>
-
-        <div style="display: flex; gap: 8px;">
-          <select id="sort-select" onchange="renderTowerTable()" style="padding: 6px 10px; font-size: 0.8rem;">
-            <option value="default">Сортування: За замовчуванням</option>
-            <option value="signal">Сила сигналу (Найкращий)</option>
-            <option value="uses_asc">Кількість використань (Свіжі спочатку)</option>
-            <option value="band">Діапазон / Частота</option>
-          </select>
-          <input type="text" class="search-input" id="search-box" placeholder="Пошук (PCI, eNodeB, IP)..." oninput="renderTowerTable()">
-        </div>
+        <input type="text" class="search-box" id="search-box" placeholder="Пошук..." oninput="renderTowerTable()">
       </div>
 
-      <!-- Add Custom Tower Sector Form -->
-      <div class="add-tower-form">
-        <div class="form-group">
-          <label>Назва вишки / Нотатка</label>
-          <input type="text" id="add-name" placeholder="напр. Kyivstar B3 Сектор 1 (Центр)">
-        </div>
-        <div class="form-group">
-          <label>Діапазон (Band)</label>
-          <select id="add-band">
-            <option value="Band 3 (1800 MHz)">Band 3 (1800 MHz) - Швидкість</option>
-            <option value="Band 7 (2600 MHz)">Band 7 (2600 MHz) - Ємність</option>
-            <option value="Band 8 (900 MHz)">Band 8 (900 MHz) - Дальній</option>
-            <option value="Band 20 (800 MHz)">Band 20 (800 MHz) - Покриття</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>EARFCN</label>
-          <input type="number" id="add-earfcn" placeholder="1500">
-        </div>
-        <div class="form-group">
-          <label>PCI (0-503)</label>
-          <input type="number" id="add-pci" placeholder="165">
-        </div>
-        <button class="btn-success btn-sm" onclick="addCustomTower()">➕ Додати в пул</button>
-      </div>
-
-      <!-- Main Towers Table -->
-      <div style="overflow-x: auto;">
-        <table class="tower-table">
+      <!-- Table -->
+      <div class="table-container">
+        <table>
           <thead>
             <tr>
-              <th style="width: 44px; text-align: center;">Пул</th>
+              <th style="width: 24px; text-align: center;">☑️</th>
               <th>Статус</th>
               <th>Назва / Сектор</th>
-              <th>Сигнал</th>
               <th>Діапазон</th>
               <th>EARFCN</th>
               <th>PCI</th>
+              <th>RSRP</th>
               <th>Останній IP</th>
-              <th>Використано</th>
+              <th>Вик.</th>
               <th>Дія</th>
             </tr>
           </thead>
           <tbody id="tower-table-body">
-            <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 20px;">Завантаження вишок...</td></tr>
+            <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 16px;">Завантаження вишок...</td></tr>
           </tbody>
         </table>
       </div>
-    </section>
 
-    <!-- Telemetry & Band Locks -->
-    <div class="grid-2">
-      <!-- Live Radio Telemetry -->
-      <section class="card">
-        <div class="card-header">
-          <h2>📊 Поточний радіосигнал</h2>
-        </div>
-        <div class="metrics-grid">
-          <div class="metric-box">
-            <span class="metric-label">RSRP (Рівень сигналу)</span>
-            <span class="metric-value" id="val-rsrp">--</span>
-            <span class="metric-sub">Оптимально: > -85 dBm</span>
-          </div>
-          <div class="metric-box">
-            <span class="metric-label">SINR / SNR (Якість)</span>
-            <span class="metric-value" id="val-sinr">--</span>
-            <span class="metric-sub">Оптимально: > 10 dB</span>
-          </div>
-          <div class="metric-box">
-            <span class="metric-label">RSSI (Загальна потужність)</span>
-            <span class="metric-value" id="val-rssi">--</span>
-            <span class="metric-sub">Діапазон -50..-80</span>
-          </div>
-          <div class="metric-box">
-            <span class="metric-label">RSRQ (Якість прийому)</span>
-            <span class="metric-value" id="val-rsrq">--</span>
-            <span class="metric-sub">Оптимально: > -10 dB</span>
-          </div>
-        </div>
-        <div style="font-size: 0.85rem; color: var(--text-muted); display: flex; justify-content: space-between;">
-          <span>Оператор: <strong id="val-op" style="color: var(--text);">Kyivstar</strong></span>
-          <span>Статус PPP: <strong id="val-ppp" style="color: var(--success-glow);">Підключено</strong></span>
-        </div>
-      </section>
-
-      <!-- 4G Band Locking -->
-      <section class="card">
-        <div class="card-header">
-          <h2>🔒 Фіксація діапазонів (Band Lock)</h2>
-        </div>
-        <div class="band-chips">
-          <label class="band-chip">
-            <input type="checkbox" id="band-b3" value="0x4" checked>
-            <div class="band-chip-label">
-              <strong>Band 3 (1800 MHz)</strong>
-              <span>Швидкісний міський (FDD)</span>
-            </div>
-          </label>
-          <label class="band-chip">
-            <input type="checkbox" id="band-b7" value="0x40" checked>
-            <div class="band-chip-label">
-              <strong>Band 7 (2600 MHz)</strong>
-              <span>Максимальна ємність</span>
-            </div>
-          </label>
-          <label class="band-chip">
-            <input type="checkbox" id="band-b8" value="0x80" checked>
-            <div class="band-chip-label">
-              <strong>Band 8 (900 MHz)</strong>
-              <span>Дальнє покриття / Траси</span>
-            </div>
-          </label>
-          <label class="band-chip">
-            <input type="checkbox" id="band-b20" value="0x80000" checked>
-            <div class="band-chip-label">
-              <strong>Band 20 (800 MHz)</strong>
-              <span>Глибоке проникнення</span>
-            </div>
-          </label>
-        </div>
-        <div style="display: flex; gap: 8px;">
-          <button style="flex: 1;" onclick="applyBandLock()">Застосувати вибрані</button>
-          <button class="btn-secondary" onclick="selectAllBands(true)">Всі</button>
-          <button class="btn-secondary" onclick="selectBandOnly('band-b3')">Тільки B3</button>
-          <button class="btn-secondary" onclick="selectBandOnly('band-b8')">Тільки B8</button>
-        </div>
-      </section>
+      <!-- Add Sector Input Row -->
+      <div class="add-row">
+        <input type="text" id="add-name" placeholder="Назва соти (напр. Центр Сектор 1)">
+        <select id="add-band">
+          <option value="Band 3 (1800 MHz)">Band 3 (1800 MHz)</option>
+          <option value="Band 8 (900 MHz)">Band 8 (900 MHz)</option>
+          <option value="Band 7 (2600 MHz)">Band 7 (2600 MHz)</option>
+          <option value="Band 20 (800 MHz)">Band 20 (800 MHz)</option>
+        </select>
+        <input type="number" id="add-earfcn" placeholder="EARFCN (1500)">
+        <input type="number" id="add-pci" placeholder="PCI (0-503)">
+        <button class="btn-primary btn-sm" onclick="addCustomTower()">➕ Додати</button>
+      </div>
     </div>
 
-    <!-- History Log Table -->
-    <section class="card">
-      <div class="card-header">
-        <h2>📜 Історія отриманих IP-адрес, локацій та сесій</h2>
-        <button class="btn-secondary btn-sm" onclick="clearIpHistory()">🗑️ Очистити історію</button>
+    <!-- Right Column: Geo-IP, Radio Telemetry & History -->
+    <div class="right-column">
+      <!-- 1. Compact Geo-IP Card -->
+      <div class="panel" style="flex-shrink: 0;">
+        <div class="panel-header">
+          <span>🌍 Публічний IP та Геолокація</span>
+          <button class="btn-sm" onclick="fetchGeoLocation()">🔄</button>
+        </div>
+        <div class="geo-panel-content">
+          <div class="geo-ip-row">
+            <div>
+              <span style="font-size: 10px; color: var(--text-muted); display: block;">Публічний IPv4</span>
+              <span class="ip-val" id="geo-public-ip">--.--.--.--</span>
+            </div>
+            <button class="btn-sm" onclick="copyPublicIp()">📋 Копіювати</button>
+          </div>
+          <div class="geo-details-grid">
+            <div class="geo-cell">
+              <span>Локація:</span>
+              <strong id="geo-loc">🇺🇦 Україна, Київ</strong>
+            </div>
+            <div class="geo-cell">
+              <span>Провайдер / ASN:</span>
+              <strong id="geo-isp">Kyivstar (AS15895)</strong>
+            </div>
+            <div class="geo-cell">
+              <span>Координати:</span>
+              <strong><span id="geo-coords">--</span> <a id="geo-map-link" href="#" target="_blank" style="color: var(--accent); text-decoration: underline; display: none;">[карта]</a></strong>
+            </div>
+            <div class="geo-cell">
+              <span>Часовий пояс:</span>
+              <strong id="geo-tz">Europe/Kyiv</strong>
+            </div>
+          </div>
+        </div>
       </div>
-      <table class="tower-table">
-        <thead>
-          <tr>
-            <th>Час</th>
-            <th>Отриманий WAN IP</th>
-            <th>Місто / Локація</th>
-            <th>Діапазон / Частота</th>
-            <th>EARFCN</th>
-            <th>PCI</th>
-            <th>Сигнал RSRP</th>
-          </tr>
-        </thead>
-        <tbody id="ip-history-body">
-          <tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 16px;">Історія порожня. Натисніть «Airplane Reconnect» або «Ротувати».</td></tr>
-        </tbody>
-      </table>
-    </section>
 
-    <div id="log-toast">Готово до роботи</div>
+      <!-- 2. Compact Radio Metrics & Band Locks -->
+      <div class="panel" style="flex-shrink: 0;">
+        <div class="panel-header">
+          <span>📊 Радіосигнал та Band Lock</span>
+        </div>
+        <div class="metrics-row">
+          <div class="metric-box">
+            <span>RSRP</span>
+            <strong id="val-rsrp">--</strong>
+          </div>
+          <div class="metric-box">
+            <span>SINR</span>
+            <strong id="val-sinr">--</strong>
+          </div>
+          <div class="metric-box">
+            <span>RSSI</span>
+            <strong id="val-rssi">--</strong>
+          </div>
+          <div class="metric-box">
+            <span>RSRQ</span>
+            <strong id="val-rsrq">--</strong>
+          </div>
+        </div>
+        <div class="band-lock-row">
+          <label><input type="checkbox" id="band-b3" value="0x4" checked onchange="applyBandLock()"> B3</label>
+          <label><input type="checkbox" id="band-b8" value="0x80" checked onchange="applyBandLock()"> B8</label>
+          <label><input type="checkbox" id="band-b7" value="0x40" checked onchange="applyBandLock()"> B7</label>
+          <label><input type="checkbox" id="band-b20" value="0x80000" checked onchange="applyBandLock()"> B20</label>
+          <button class="btn-sm" onclick="selectAllBands(true)">Всі</button>
+        </div>
+      </div>
+
+      <!-- 3. IP History Log (Scrollable) -->
+      <div class="panel" style="flex: 1;">
+        <div class="panel-header">
+          <span>📜 Журнал IP-ротацій</span>
+          <button class="btn-sm" onclick="clearIpHistory()">🗑️</button>
+        </div>
+        <div class="history-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Час</th>
+                <th>Отриманий IP</th>
+                <th>Локація</th>
+                <th>Band / PCI</th>
+              </tr>
+            </thead>
+            <tbody id="ip-history-body">
+              <tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 10px;">Журнал порожній.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   </div>
+
+  <!-- Minimalist Status Toast -->
+  <footer>
+    <span id="log-toast">[Готово до роботи]</span>
+    <span>API: <code>curl http://127.0.0.1:8080/api/reconnect</code></span>
+  </footer>
 
   <script>
     const ROUTER_BASE = window.location.origin.includes("192.168.0.1") || window.location.origin.includes("127.0.0.1") || window.location.origin.includes("localhost")
@@ -900,7 +604,6 @@
       { name: "Band 20 (800 MHz)", mask: "0x0000000000080000" }
     ];
 
-    // Master Catalog Presets for Kyivstar LTE
     const DEFAULT_PRESETS = {
       "1500_166": { name: "Kyivstar B3 Сектор 2 (eNodeB 321826)", band: "Band 3 (1800 MHz)", earfcn: "1500", pci: "166", rsrp: -92, enabled: true, useCount: 1 },
       "1500_167": { name: "Kyivstar B3 Сектор 3 (eNodeB 321826)", band: "Band 3 (1800 MHz)", earfcn: "1500", pci: "167", rsrp: -88, enabled: true, useCount: 1 },
@@ -988,21 +691,14 @@
       }
     }
 
-    // Geolocation Fetcher
     async function fetchGeoLocation() {
       try {
-        document.getElementById("geo-status-badge").innerText = "⏳ Оновлення...";
         let data = null;
-
-        // Try local backend proxy first (/api/geo)
         try {
           const resp = await fetch("/api/geo");
-          if (resp.ok) {
-            data = await resp.json();
-          }
+          if (resp.ok) data = await resp.json();
         } catch(e) {}
 
-        // Fallback to client-side public API
         if (!data || !data.ip) {
           const resp = await fetch("https://ipwho.is/");
           data = await resp.json();
@@ -1013,7 +709,6 @@
           const ip = data.ip || "--";
           const country = data.country || "Україна";
           const flag = data.flag?.emoji || "🇺🇦";
-          const region = data.region || data.region_code || "--";
           const city = data.city || "--";
           const isp = data.connection?.isp || data.isp || "Kyivstar PJSC";
           const asn = data.connection?.asn ? `AS${data.connection.asn}` : (data.asn || "AS15895");
@@ -1022,26 +717,20 @@
           const tz = data.timezone?.id || data.timezone || "Europe/Kyiv";
 
           document.getElementById("geo-public-ip").innerText = ip;
-          document.getElementById("geo-country").innerText = `${flag} ${country}`;
-          document.getElementById("geo-region").innerText = region;
-          document.getElementById("geo-city").innerText = city;
-          document.getElementById("geo-isp").innerText = isp;
-          document.getElementById("geo-asn").innerText = asn;
-          document.getElementById("geo-timezone").innerText = tz;
+          document.getElementById("stat-pub-ip").innerText = ip;
+          document.getElementById("geo-loc").innerText = `${flag} ${country}, ${city}`;
+          document.getElementById("geo-isp").innerText = `${isp} (${asn})`;
+          document.getElementById("geo-tz").innerText = tz;
 
           if (lat && lon) {
-            document.getElementById("geo-coords-text").innerText = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+            document.getElementById("geo-coords").innerText = `${lat.toFixed(3)}, ${lon.toFixed(3)}`;
             const mapLink = document.getElementById("geo-map-link");
             mapLink.href = `https://www.google.com/maps?q=${lat},${lon}`;
             mapLink.style.display = "inline";
           }
-
-          document.getElementById("geo-status-badge").innerText = "🟢 Оновлено";
-          log(`[Geo] Публічний IP: ${ip} (${city}, ${country})`);
+          log(`Geo: ${ip} (${city}, ${country})`);
         }
-      } catch (err) {
-        document.getElementById("geo-status-badge").innerText = "⚠️ Помилка Geo";
-      }
+      } catch (err) {}
     }
 
     function copyPublicIp() {
@@ -1060,42 +749,23 @@
       renderTowerTable();
     }
 
-    function getSignalClass(rsrp) {
-      if (!rsrp || rsrp === "--") return "sig-2";
-      const val = parseInt(rsrp);
-      if (val >= -85) return "sig-4";
-      if (val >= -95) return "sig-3";
-      if (val >= -105) return "sig-2";
-      return "sig-1";
-    }
-
     function updateStats() {
-      const keys = Object.keys(towerDatabase);
-      const total = keys.length;
-      let fresh = 0;
-      for (let k of keys) {
-        if (!towerDatabase[k].useCount || towerDatabase[k].useCount === 0) fresh++;
-      }
-      document.getElementById("stat-total-towers").innerText = total;
-      document.getElementById("stat-fresh-towers").innerText = fresh;
       document.getElementById("stat-rotate-count").innerText = rotationCounter;
-      document.getElementById("stat-cur-tower").innerText = curKey ? (towerDatabase[curKey]?.band || "LTE") : "--";
-      document.getElementById("stat-cur-pci").innerText = curEarfcn ? `${curEarfcn} / PCI ${curPci}` : "--";
-      document.getElementById("stat-cur-ip").innerText = curWanIp || "--";
+      document.getElementById("stat-cur-band").innerText = curKey ? (towerDatabase[curKey]?.band || "LTE") : "--";
+      document.getElementById("stat-cur-pci").innerText = curEarfcn ? `${curEarfcn} / ${curPci}` : "--";
+      document.getElementById("stat-wan-ip").innerText = curWanIp || "--";
     }
 
     function renderTowerTable() {
       const tbody = document.getElementById("tower-table-body");
       const search = (document.getElementById("search-box")?.value || "").toLowerCase();
-      const sortMode = document.getElementById("sort-select")?.value || "default";
 
       let keys = Object.keys(towerDatabase);
       if (keys.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 20px;">Немає вишок. Натисніть «Завантажити пресети».</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 14px;">Немає вишок.</td></tr>';
         return;
       }
 
-      // Filter by Group
       keys = keys.filter(k => {
         const t = towerDatabase[k];
         if (currentFilterGroup === "b3") return t.band && t.band.includes("Band 3");
@@ -1107,7 +777,6 @@
         return true;
       });
 
-      // Filter by Search Query
       if (search) {
         keys = keys.filter(k => {
           const t = towerDatabase[k];
@@ -1118,24 +787,15 @@
         });
       }
 
-      // Sorting
-      if (sortMode === "signal") {
-        keys.sort((a, b) => (towerDatabase[b].rsrp || -999) - (towerDatabase[a].rsrp || -999));
-      } else if (sortMode === "uses_asc") {
-        keys.sort((a, b) => (towerDatabase[a].useCount || 0) - (towerDatabase[b].useCount || 0));
-      } else if (sortMode === "band") {
-        keys.sort((a, b) => (towerDatabase[a].band || "").localeCompare(towerDatabase[b].band || ""));
-      } else {
-        keys.sort((a, b) => {
-          if (a === curKey) return -1;
-          if (b === curKey) return 1;
-          const uA = towerDatabase[a].useCount || 0;
-          const uB = towerDatabase[b].useCount || 0;
-          if (uA === 0 && uB !== 0) return -1;
-          if (uB === 0 && uA !== 0) return 1;
-          return (towerDatabase[a].lastUsed || 0) - (towerDatabase[b].lastUsed || 0);
-        });
-      }
+      keys.sort((a, b) => {
+        if (a === curKey) return -1;
+        if (b === curKey) return 1;
+        const uA = towerDatabase[a].useCount || 0;
+        const uB = towerDatabase[b].useCount || 0;
+        if (uA === 0 && uB !== 0) return -1;
+        if (uB === 0 && uA !== 0) return 1;
+        return (towerDatabase[a].lastUsed || 0) - (towerDatabase[b].lastUsed || 0);
+      });
 
       let html = "";
       for (let k of keys) {
@@ -1143,44 +803,27 @@
         const isActive = (k === curKey);
         const isFresh = (!t.useCount || t.useCount === 0);
         const isEnabled = (t.enabled !== false);
-        const sigClass = getSignalClass(t.rsrp);
 
         let badge = "";
-        if (isActive) {
-          badge = '<span class="badge-active">🟢 Активна</span>';
-        } else if (isFresh) {
-          badge = '<span class="badge-fresh">⚪ Свіжа (0р)</span>';
-        } else {
-          badge = `<span class="badge-used">🟡 Використана (${t.useCount}р)</span>`;
-        }
-
-        const ipStr = t.lastIp || "—";
-        const nameStr = t.name || `Сектор PCI ${t.pci}`;
-        const rsrpStr = t.rsrp ? `${t.rsrp} dBm` : "--";
+        if (isActive) badge = '<span class="tag-active">🟢 Активна</span>';
+        else if (isFresh) badge = '<span class="tag-fresh">⚪ Свіжа</span>';
+        else badge = `<span class="tag-used">🟡 ${t.useCount}р</span>`;
 
         html += `
-          <tr class="tower-row" style="${isActive ? 'background: rgba(46, 160, 67, 0.1);' : ''}">
+          <tr class="${isActive ? 'active-row' : ''}">
             <td style="text-align: center;">
-              <input type="checkbox" ${isEnabled ? 'checked' : ''} onchange="toggleTowerPool('${k}', this.checked)" title="Включити в ротацію">
+              <input type="checkbox" ${isEnabled ? 'checked' : ''} onchange="toggleTowerPool('${k}', this.checked)">
             </td>
             <td>${badge}</td>
-            <td><strong>${nameStr}</strong></td>
-            <td>
-              <div class="signal-meter ${sigClass}">
-                <div class="sig-bar"></div>
-                <div class="sig-bar"></div>
-                <div class="sig-bar"></div>
-                <div class="sig-bar"></div>
-              </div>
-              <span style="font-size: 0.8rem; color: var(--text-muted);">${rsrpStr}</span>
-            </td>
+            <td><strong>${t.name}</strong></td>
             <td>${t.band}</td>
             <td><code>${t.earfcn}</code></td>
             <td><code>${t.pci}</code></td>
-            <td style="font-family: monospace; color: var(--accent); font-size: 0.8rem;">${ipStr}</td>
+            <td>${t.rsrp ? t.rsrp + ' dBm' : '--'}</td>
+            <td style="font-family: monospace; color: var(--accent);">${t.lastIp || '—'}</td>
             <td>${t.useCount || 0}</td>
             <td>
-              ${isActive ? '<span style="color: var(--success-glow); font-size: 0.75rem; font-weight: 700;">Підключено</span>' : `<button class="btn-secondary btn-sm" onclick="connectToTowerSafely('${t.earfcn}', '${t.pci}')">⚡ Підключити</button>`}
+              ${isActive ? '<span style="color: var(--success-bright); font-weight: 700;">OK</span>' : `<button class="btn-sm" onclick="connectToTowerSafely('${t.earfcn}', '${t.pci}')">⚡</button>`}
             </td>
           </tr>
         `;
@@ -1191,20 +834,17 @@
     function renderHistory() {
       const tbody = document.getElementById("ip-history-body");
       if (!ipHistory.length) {
-        tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 16px;">Історія порожня. Натисніть «Airplane Reconnect» або «Ротувати».</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 10px;">Журнал порожній.</td></tr>';
         return;
       }
       let html = "";
-      for (let h of ipHistory.slice(0, 15)) {
+      for (let h of ipHistory.slice(0, 20)) {
         html += `
-          <tr class="tower-row">
+          <tr>
             <td style="color: var(--text-muted);">${new Date(h.time).toLocaleTimeString()}</td>
-            <td style="font-family: monospace; color: var(--success-glow); font-weight: 700;">${h.ip}</td>
-            <td><span style="color: var(--accent);">${h.city || "Київ"}</span>, ${h.country || "UA"}</td>
-            <td><strong>${h.band}</strong></td>
-            <td><code>${h.earfcn}</code></td>
-            <td><code>${h.pci}</code></td>
-            <td>${h.rsrp} dBm</td>
+            <td style="font-family: monospace; color: var(--success-bright); font-weight: 700;">${h.ip}</td>
+            <td>${h.city || "Київ"}</td>
+            <td><code>${h.band || "B3"} / ${h.pci || "--"}</code></td>
           </tr>
         `;
       }
@@ -1216,7 +856,7 @@
       if (ipHistory.length && ipHistory[0].ip === ip) return;
 
       const city = lastGeoData?.city || "Київ";
-      const country = lastGeoData?.country || "Україна";
+      const country = lastGeoData?.country || "UA";
 
       ipHistory.unshift({
         time: Date.now(),
@@ -1244,20 +884,16 @@
         if (!towerDatabase[k]) towerDatabase[k] = JSON.parse(JSON.stringify(DEFAULT_PRESETS[k]));
       }
       saveTowerDatabase();
-      log("Пресети завантажено!");
+      log("Пресети завантажено.");
     }
 
     function addCustomTower() {
-      const name = document.getElementById("add-name").value.trim() || "Спеціальна сота";
+      const name = document.getElementById("add-name").value.trim() || "Сектор";
       const band = document.getElementById("add-band").value;
       const earfcn = document.getElementById("add-earfcn").value.trim();
       const pci = document.getElementById("add-pci").value.trim();
 
-      if (!earfcn || !pci) {
-        alert("Введіть EARFCN та PCI!");
-        return;
-      }
-
+      if (!earfcn || !pci) return;
       const key = `${earfcn}_${pci}`;
       towerDatabase[key] = {
         name: name,
@@ -1273,15 +909,14 @@
       document.getElementById("add-name").value = "";
       document.getElementById("add-earfcn").value = "";
       document.getElementById("add-pci").value = "";
-
       saveTowerDatabase();
-      log(`[+] Додано соту: ${name} (EARFCN=${earfcn}, PCI=${pci})!`);
+      log(`[+] Додано: ${name}`);
     }
 
     async function fetchStatus() {
       if (isScanning) return;
       try {
-        const keys = "wa_inner_version,hardware_version,network_provider,network_type,network_lte_rsrp,lte_rsrp,lte_rsrq,lte_snr,network_sinr,lte_rssi,lte_band_lock,wan_active_band,wan_active_channel,lte_pci,cell_id,network_cell_id,loginfo,ppp_status,wan_ipaddr";
+        const keys = "wa_inner_version,hardware_version,network_provider,network_type,network_lte_rsrp,lte_rsrp,lte_rsrq,lte_snr,network_sinr,lte_rssi,lte_band_lock,wan_active_band,wan_active_channel,lte_pci,cell_id,loginfo,ppp_status,wan_ipaddr";
         let data = await apiGet(keys);
         if (data.loginfo !== "ok") {
           const ok = await login();
@@ -1301,14 +936,11 @@
           const rsrq = data.lte_rsrq || "--";
           curWanIp = data.wan_ipaddr || "";
 
-          document.getElementById("val-rsrp").innerText = rsrp !== "--" ? `${rsrp} dBm` : "--";
-          document.getElementById("val-sinr").innerText = sinr !== "--" ? `${sinr} dB` : "--";
-          document.getElementById("val-rssi").innerText = rssi !== "--" ? `${rssi} dBm` : "--";
-          document.getElementById("val-rsrq").innerText = rsrq !== "--" ? `${rsrq} dB` : "--";
-          document.getElementById("val-op").innerText = `${data.network_provider || "Kyivstar"} (${data.network_type || "LTE"})`;
-          document.getElementById("val-ppp").innerText = data.ppp_status || "ppp_connected";
+          document.getElementById("val-rsrp").innerText = rsrp !== "--" ? `${rsrp}` : "--";
+          document.getElementById("val-sinr").innerText = sinr !== "--" ? `${sinr}` : "--";
+          document.getElementById("val-rssi").innerText = rssi !== "--" ? `${rssi}` : "--";
+          document.getElementById("val-rsrq").innerText = rsrq !== "--" ? `${rsrq}` : "--";
 
-          // Active Tower Update
           const band = data.wan_active_band || "LTE BAND 3";
           curEarfcn = data.wan_active_channel || "1500";
           curPci = data.lte_pci || "166";
@@ -1316,7 +948,7 @@
 
           if (!towerDatabase[curKey]) {
             towerDatabase[curKey] = {
-              name: `Kyivstar ${band} (Сектор PCI ${curPci})`,
+              name: `Kyivstar ${band} (PCI ${curPci})`,
               band: band,
               earfcn: curEarfcn,
               pci: curPci,
@@ -1339,44 +971,35 @@
           }
 
           saveTowerDatabase();
-          log("Дані оновлено.");
         } else {
           dot.className = "dot";
           statusText.innerText = "Офлайн";
         }
       } catch (err) {
         document.getElementById("status-dot").className = "dot";
-        document.getElementById("status-text").innerText = "Помилка зв'язку";
+        document.getElementById("status-text").innerText = "Помилка";
       }
     }
 
-    // 100% Native Airplane Reconnect
     async function triggerAirplaneReconnect() {
       const btn = document.getElementById("btn-airplane");
       btn.disabled = true;
-      btn.innerText = "✈️ ПЕРЕЗАПУСК РАДІОСЕСІЇ...";
-      log("✈️ Вимкнення радіотракту (DISCONNECT_NETWORK)...");
+      btn.innerText = "⏳ Airplane...";
+      log("✈️ Airplane Reconnect: Відключення сесії...");
 
-      // 1. Clear any stuck cell locks
       await apiPost("LTE_LOCK_CELL_SET", { lte_earfcn_lock: "0", lte_pci_lock: "0" });
-
-      // 2. Disconnect PPP / Cellular
       await apiPost("DISCONNECT_NETWORK", { notCallback: "true" });
-      await new Promise(r => setTimeout(r, 1500));
-
-      log("✈️ Увімкнення радіотракту (CONNECT_NETWORK)...");
-      // 3. Connect PPP / Cellular
+      await new Promise(r => setTimeout(r, 1400));
       await apiPost("CONNECT_NETWORK", { notCallback: "true" });
 
       rotationCounter++;
       saveTowerDatabase();
 
-      // Poll for connection
       for (let i = 0; i < 6; i++) {
         await new Promise(r => setTimeout(r, 1000));
-        const st = await apiGet("wan_ipaddr,ppp_status,wan_active_band");
+        const st = await apiGet("wan_ipaddr,ppp_status");
         if (st.ppp_status === "ppp_connected" && st.wan_ipaddr) {
-          log(`✅ Успішно відновлено! Новий WAN IP: ${st.wan_ipaddr}`);
+          log(`✅ Новий WAN IP: ${st.wan_ipaddr}`);
           break;
         }
       }
@@ -1384,10 +1007,9 @@
       fetchStatus();
       fetchGeoLocation();
       btn.disabled = false;
-      btn.innerText = "✈️ AIRPLANE RECONNECT (ЯК НА IPHONE)";
+      btn.innerText = "✈️ Airplane Reconnect";
     }
 
-    // Safe Band-Hop Tower Rotation
     async function triggerNextTowerRotation() {
       const btn = document.getElementById("btn-rotate-next");
       btn.disabled = true;
@@ -1395,7 +1017,7 @@
 
       currentBandIndex = (currentBandIndex + 1) % ROTATION_BANDS.length;
       const target = ROTATION_BANDS[currentBandIndex];
-      log(`⚡ Ротація на частоту: ${target.name}...`);
+      log(`⚡ Ротація частоти: ${target.name}...`);
 
       await apiPost("LTE_LOCK_CELL_SET", { lte_earfcn_lock: "0", lte_pci_lock: "0" });
       await apiPost("BAND_SELECT", {
@@ -1415,32 +1037,26 @@
         fetchStatus();
         fetchGeoLocation();
       }, 3000);
-      log(`✅ Перемкнуто на ${target.name}! Запит нового IP...`);
 
       btn.disabled = false;
-      btn.innerText = "⚡ РОТУВАТИ НА НАСТУПНУ ВИШКУ (ПО ТРИГЕРУ)";
+      btn.innerText = "⚡ Ротувати вишку (Band-Hop)";
     }
 
     async function connectToTowerSafely(earfcn, pci) {
-      log(`⚡ Підключення до соти: EARFCN=${earfcn}, PCI=${pci}...`);
+      log(`⚡ Сота: EARFCN=${earfcn}, PCI=${pci}...`);
 
-      await apiPost("LTE_LOCK_CELL_SET", {
-        lte_earfcn_lock: earfcn,
-        lte_pci_lock: pci
-      });
-
+      await apiPost("LTE_LOCK_CELL_SET", { lte_earfcn_lock: earfcn, lte_pci_lock: pci });
       await apiPost("DISCONNECT_NETWORK", { notCallback: "true" });
       await new Promise(r => setTimeout(r, 1200));
       await apiPost("CONNECT_NETWORK", { notCallback: "true" });
 
-      // 3.5s Watchdog: Check if connection succeeded, else revert to Auto
       setTimeout(async () => {
         const st = await apiGet("ppp_status,network_type");
         if (st.ppp_status !== "ppp_connected" || st.network_type === "NO_SERVICE") {
-          log("⚠️ Сота не відповідає. Автоскидання в режим Auto для збереження інтернету...");
+          log("⚠️ Скидання в режим Auto...");
           await restoreFullAuto();
         } else {
-          log(`✅ Успішно зафіксовано на EARFCN=${earfcn}, PCI=${pci}!`);
+          log(`✅ Зафіксовано на PCI=${pci}!`);
           fetchStatus();
           fetchGeoLocation();
         }
@@ -1448,7 +1064,7 @@
     }
 
     async function restoreFullAuto() {
-      log("🔄 Скидання в повний автоматичний режим (всі діапазони)...");
+      log("🔄 Режим Auto...");
       await apiPost("LTE_LOCK_CELL_SET", { lte_earfcn_lock: "0", lte_pci_lock: "0" });
       await apiPost("BAND_SELECT", {
         is_gw_band: "0",
@@ -1461,7 +1077,6 @@
         fetchStatus();
         fetchGeoLocation();
       }, 2000);
-      log("✅ Режим Auto увімкнено.");
     }
 
     async function discoverAllSectors() {
@@ -1471,69 +1086,56 @@
       const scanPanel = document.getElementById("scan-panel");
       const progressFill = document.getElementById("scan-progress-fill");
       const statusText = document.getElementById("scan-status-text");
-      const detailText = document.getElementById("scan-detail-text");
       const pctText = document.getElementById("scan-pct-text");
 
-      scanPanel.className = "scan-progress-panel active";
+      scanPanel.className = "scan-banner active";
 
       const scanTargets = [
-        { name: "Band 3 (1800 MHz) Основний", mask: "0x0000000000000004", earfcn: "1500" },
-        { name: "Band 8 (900 MHz) Дальній", mask: "0x0000000000000080", earfcn: "3575" },
-        { name: "Band 7 (2600 MHz) Ємність", mask: "0x0000000000000040", earfcn: "3000" },
-        { name: "Band 20 (800 MHz) Покриття", mask: "0x0000000000080000", earfcn: "6300" }
+        { name: "Band 3 (1800 MHz)", mask: "0x0000000000000004" },
+        { name: "Band 8 (900 MHz)",  mask: "0x0000000000000080" },
+        { name: "Band 7 (2600 MHz)", mask: "0x0000000000000040" },
+        { name: "Band 20 (800 MHz)", mask: "0x0000000000080000" }
       ];
 
-      const totalSteps = scanTargets.length;
-      let step = 0;
-
-      for (let target of scanTargets) {
-        step++;
-        const pct = Math.round((step / totalSteps) * 100);
+      for (let i = 0; i < scanTargets.length; i++) {
+        const pct = Math.round(((i + 1) / scanTargets.length) * 100);
         progressFill.style.width = `${pct}%`;
         pctText.innerText = `${pct}%`;
-        statusText.innerText = `🔍 Сканування [${step}/${totalSteps}]: ${target.name}...`;
-        detailText.innerText = `Перемикання частоти на ${target.name}...`;
+        statusText.innerText = `🔍 Сканування [${i+1}/4]: ${scanTargets[i].name}...`;
 
         await apiPost("LTE_LOCK_CELL_SET", { lte_earfcn_lock: "0", lte_pci_lock: "0" });
         await apiPost("BAND_SELECT", {
           is_gw_band: "0",
           gw_band_mask: "0",
           is_lte_band: "1",
-          lte_band_mask: target.mask
+          lte_band_mask: scanTargets[i].mask
         });
 
         await new Promise(r => setTimeout(r, 2600));
 
-        const st = await apiGet("wan_active_band,wan_active_channel,lte_pci,cell_id,network_lte_rsrp,wan_ipaddr");
-        const earfcn = st.wan_active_channel;
-        const pci = st.lte_pci;
-        const rsrp = parseInt(st.network_lte_rsrp) || -90;
-
-        if (earfcn && pci) {
-          const key = `${earfcn}_${pci}`;
+        const st = await apiGet("wan_active_band,wan_active_channel,lte_pci,network_lte_rsrp,wan_ipaddr");
+        if (st.wan_active_channel && st.lte_pci) {
+          const key = `${st.wan_active_channel}_${st.lte_pci}`;
           towerDatabase[key] = {
-            name: `Kyivstar ${st.wan_active_band || target.name} (PCI ${pci})`,
-            band: st.wan_active_band || target.name,
-            earfcn: earfcn,
-            pci: pci,
-            rsrp: rsrp,
+            name: `Kyivstar ${st.wan_active_band || scanTargets[i].name} (PCI ${st.lte_pci})`,
+            band: st.wan_active_band || scanTargets[i].name,
+            earfcn: st.wan_active_channel,
+            pci: st.lte_pci,
+            rsrp: parseInt(st.network_lte_rsrp) || -90,
             enabled: true,
             useCount: 0,
             firstSeen: Date.now(),
             lastUsed: 0,
             lastIp: st.wan_ipaddr || ""
           };
-          detailText.innerText = `[+] Знайдено: ${target.name} (PCI=${pci}, RSRP=${rsrp} dBm)`;
           saveTowerDatabase();
         }
       }
 
-      statusText.innerText = "Відновлення всіх діапазонів...";
       await restoreFullAuto();
-
-      statusText.innerText = "✅ Сканування завершено!";
-      setTimeout(() => { scanPanel.className = "scan-progress-panel"; }, 3000);
+      scanPanel.className = "scan-banner";
       isScanning = false;
+      log("✅ Сканування завершено!");
     }
 
     function clearHistory() {
@@ -1541,28 +1143,20 @@
         towerDatabase = {};
         rotationCounter = 0;
         saveTowerDatabase();
-        log("Список очищено.");
       }
     }
 
     function clearIpHistory() {
-      if (confirm("Очистити історію IP?")) {
+      if (confirm("Очистити журнал IP?")) {
         ipHistory = [];
         localStorage.setItem("zte_ip_history", "[]");
         renderHistory();
-        log("Історію IP очищено.");
       }
     }
 
     function selectAllBands(state) {
       ["band-b3", "band-b7", "band-b8", "band-b20"].forEach(id => {
         document.getElementById(id).checked = state;
-      });
-    }
-
-    function selectBandOnly(targetId) {
-      ["band-b3", "band-b7", "band-b8", "band-b20"].forEach(id => {
-        document.getElementById(id).checked = (id === targetId);
       });
       applyBandLock();
     }
@@ -1575,15 +1169,13 @@
       if (document.getElementById("band-b20").checked) total += 0x80000;
 
       const hexMask = "0x" + total.toString(16).padStart(16, "0");
-      log(`Застосування маски діапазонів: ${hexMask}...`);
       await apiPost("LTE_LOCK_CELL_SET", { lte_earfcn_lock: "0", lte_pci_lock: "0" });
-      const res = await apiPost("BAND_SELECT", {
+      await apiPost("BAND_SELECT", {
         is_gw_band: "0",
         gw_band_mask: "0",
         is_lte_band: "1",
         lte_band_mask: hexMask
       });
-      log(`Результат: ${JSON.stringify(res)}`);
       setTimeout(() => {
         fetchStatus();
         fetchGeoLocation();
