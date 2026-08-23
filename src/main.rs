@@ -572,9 +572,78 @@ fn handle_service_command(action: ServiceAction) {
             }
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     {
-        println!("[*] Service management via systemd/launchd: on macOS/Linux use standard background runner or nohup.");
+        use std::process::Command;
+        use std::fs;
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/Users".to_string());
+        let plist_dir = format!("{}/Library/LaunchAgents", home);
+        let plist_path = format!("{}/com.zte.rotator.plist", plist_dir);
+        let log_dir = format!("{}/.zte-k12-rotator", home);
+        let exe_path = std::env::current_exe().unwrap_or_default();
+        let exe_str = exe_path.to_string_lossy().to_string();
+
+        match action {
+            ServiceAction::Install => {
+                println!("[*] Installing macOS background service (LaunchAgent)...");
+                let _ = fs::create_dir_all(&plist_dir);
+                let _ = fs::create_dir_all(&log_dir);
+
+                let plist_content = format!(r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.zte.rotator</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{}</string>
+        <string>ui</string>
+        <string>--no-open</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{}/service.log</string>
+    <key>StandardErrorPath</key>
+    <string>{}/service.err</string>
+</dict>
+</plist>"#, exe_str, log_dir, log_dir);
+
+                if let Ok(_) = fs::write(&plist_path, plist_content) {
+                    let _ = Command::new("launchctl").args(&["unload", "-w", &plist_path]).status();
+                    let status = Command::new("launchctl").args(&["load", "-w", &plist_path]).status();
+                    if status.map(|s| s.success()).unwrap_or(false) {
+                        println!("[+] Successfully registered LaunchAgent at: {}", plist_path);
+                        println!("[+] Background service active at http://127.0.0.1:8080");
+                    } else {
+                        eprintln!("[-] Failed to load LaunchAgent via launchctl.");
+                    }
+                } else {
+                    eprintln!("[-] Failed to write plist file: {}", plist_path);
+                }
+            }
+            ServiceAction::Uninstall => {
+                println!("[*] Unloading and removing macOS LaunchAgent...");
+                let _ = Command::new("launchctl").args(&["unload", "-w", &plist_path]).status();
+                let _ = fs::remove_file(&plist_path);
+                println!("[+] Service uninstalled.");
+            }
+            ServiceAction::Start => {
+                let _ = Command::new("launchctl").args(&["start", "com.zte.rotator"]).status();
+                println!("[+] LaunchAgent started.");
+            }
+            ServiceAction::Stop => {
+                let _ = Command::new("launchctl").args(&["stop", "com.zte.rotator"]).status();
+                println!("[+] LaunchAgent stopped.");
+            }
+        }
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        println!("[*] Service management: on Linux use systemd user service or nohup.");
         match action {
             ServiceAction::Install => println!("[+] Use: nohup zte-control ui --no-open >/dev/null 2>&1 &"),
             _ => println!("[+] Action noted."),
