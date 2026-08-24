@@ -2,10 +2,12 @@
 //! `ZTEClient` and turns `Command`s into modem operations and `Event`s. All the
 //! blocking HTTP happens here, never on the UI thread.
 
-use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender};
+use std::sync::Arc;
 
-use zte_control::{decode_bands, get_first_non_empty, fleet_rotate, FleetConfig, ZTEClient};
+use zte_control::{
+    decode_bands, fleet_rotate, get_first_non_empty, FleetConfig, Logger, ZTEClient,
+};
 
 use crate::api::{Command, Event, StatusSnapshot};
 
@@ -71,29 +73,29 @@ pub fn spawn(cmd_rx: Receiver<Command>, ev_tx: Sender<Event>, repaint: impl Fn()
                         }
                     }
                     if let Ok(s) = fetch_status(&client, password_good) {
-                        let _ = ev_tx.send(Event::Status(s));
+                        let _ = ev_tx.send(Event::Status(Box::new(s)));
                     }
                 }
                 // Poll failures are transient and MUST NOT be logged (would spam);
                 // just skip this tick.
                 Command::RefreshStatus => {
                     if let Ok(s) = fetch_status(&client, password_good) {
-                        let _ = ev_tx.send(Event::Status(s));
+                        let _ = ev_tx.send(Event::Status(Box::new(s)));
                     }
                 }
                 Command::Rotate | Command::Reconnect => {
                     let _ = ev_tx.send(Event::Busy(true));
                     log(&ev_tx, "Rotating (band-hop + reconnect)…".into());
                     match client.rotate_and_reconnect() {
-                        Ok(ip) => {
-                            let _ = ev_tx.send(Event::RotationDone(ip));
+                        Ok(outcome) => {
+                            let _ = ev_tx.send(Event::RotationDone(outcome));
                         }
                         Err(e) => {
                             let _ = ev_tx.send(Event::Error(e));
                         }
                     }
                     if let Ok(s) = fetch_status(&client, password_good) {
-                        let _ = ev_tx.send(Event::Status(s));
+                        let _ = ev_tx.send(Event::Status(Box::new(s)));
                     }
                     let _ = ev_tx.send(Event::Busy(false));
                 }
@@ -106,7 +108,7 @@ pub fn spawn(cmd_rx: Receiver<Command>, ev_tx: Sender<Event>, repaint: impl Fn()
                         }
                     }
                     if let Ok(s) = fetch_status(&client, password_good) {
-                        let _ = ev_tx.send(Event::Status(s));
+                        let _ = ev_tx.send(Event::Status(Box::new(s)));
                     }
                     let _ = ev_tx.send(Event::Busy(false));
                 }
@@ -119,7 +121,7 @@ pub fn spawn(cmd_rx: Receiver<Command>, ev_tx: Sender<Event>, repaint: impl Fn()
                         }
                     }
                     if let Ok(s) = fetch_status(&client, password_good) {
-                        let _ = ev_tx.send(Event::Status(s));
+                        let _ = ev_tx.send(Event::Status(Box::new(s)));
                     }
                     let _ = ev_tx.send(Event::Busy(false));
                 }
@@ -128,29 +130,26 @@ pub fn spawn(cmd_rx: Receiver<Command>, ev_tx: Sender<Event>, repaint: impl Fn()
                     log(&ev_tx, "Scanning bands for towers…".into());
                     for (name, mask) in SCAN_BANDS {
                         log(&ev_tx, format!("  scanning {}…", name));
-                        // Clear cell lock, then force this LTE band only (2G/3G off)
-                        // so the modem camps on whatever LTE cell that band offers.
-                        let mut clr = HashMap::new();
-                        clr.insert("lte_earfcn_lock".to_string(), "0".to_string());
-                        clr.insert("lte_pci_lock".to_string(), "0".to_string());
-                        let _ = client.post_cmd("LTE_LOCK_CELL_SET", clr, true);
-                        let mut p = HashMap::new();
-                        p.insert("is_gw_band".to_string(), "0".to_string());
-                        p.insert("gw_band_mask".to_string(), "0".to_string());
-                        p.insert("is_lte_band".to_string(), "1".to_string());
-                        p.insert("lte_band_mask".to_string(), (*mask).to_string());
-                        let _ = client.post_cmd("BAND_SELECT", p, true);
+                        // Clear the cell lock and point the modem at this LTE band.
+                        // Goes through the core's `scan_band`, which keeps 2G/3G
+                        // enabled: hand-rolling `is_gw_band=0, gw_band_mask=0` here
+                        // meant that killing the app mid-scan left the modem with
+                        // one LTE band and no RAT to fall back to.
+                        if let Err(e) = client.scan_band(mask) {
+                            let _ = ev_tx.send(Event::Error(format!("{}: {}", name, e)));
+                            continue;
+                        }
                         std::thread::sleep(std::time::Duration::from_millis(3000));
                         // Recording happens via record_tower when the kernel gets this Status.
                         if let Ok(s) = fetch_status(&client, password_good) {
-                            let _ = ev_tx.send(Event::Status(s));
+                            let _ = ev_tx.send(Event::Status(Box::new(s)));
                         }
                     }
                     log(&ev_tx, "Restoring all bands…".into());
                     let _ = client.unlock_bands();
                     std::thread::sleep(std::time::Duration::from_millis(2000));
                     if let Ok(s) = fetch_status(&client, password_good) {
-                        let _ = ev_tx.send(Event::Status(s));
+                        let _ = ev_tx.send(Event::Status(Box::new(s)));
                     }
                     let _ = ev_tx.send(Event::Busy(false));
                     log(&ev_tx, "Band scan complete.".into());
@@ -160,7 +159,14 @@ pub fn spawn(cmd_rx: Receiver<Command>, ev_tx: Sender<Event>, repaint: impl Fn()
                     match serde_json::from_str::<FleetConfig>(&json) {
                         Ok(cfg) => {
                             log(&ev_tx, "Running one make-before-break fleet cycle…".into());
-                            match fleet_rotate(cfg, true) {
+                            // A cycle can take ~2 minutes. Route its progress into
+                            // the Log tab: this is a windowed build, so anything
+                            // the core printed to stdout went nowhere.
+                            let sink = ev_tx.clone();
+                            let fleet_log: Logger = Arc::new(move |m: &str| {
+                                let _ = sink.send(Event::Log(m.to_string()));
+                            });
+                            match fleet_rotate(cfg, true, fleet_log) {
                                 Ok(()) => log(&ev_tx, "Fleet cycle complete.".into()),
                                 Err(e) => {
                                     let _ = ev_tx.send(Event::Error(e));

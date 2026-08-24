@@ -15,11 +15,11 @@ use crate::kernel::Module;
 pub fn all() -> Vec<Box<dyn Module>> {
     vec![
         Box::new(connection::ConnectionModule::default()),
-        Box::new(status::StatusModule::default()),
-        Box::new(rotation::RotationModule::default()),
-        Box::new(towers::TowersModule::default()),
-        Box::new(connections::ConnectionsModule::default()),
+        Box::new(status::StatusModule),
+        Box::new(rotation::RotationModule),
+        Box::new(towers::TowersModule),
+        Box::new(connections::ConnectionsModule),
         Box::new(fleet::FleetModule::default()),
-        Box::new(log::LogModule::default()),
+        Box::new(log::LogModule),
     ]
 }

@@ -20,7 +20,7 @@ impl Module for StatusModule {
 
         let s = &cx.model.status;
         egui::Grid::new("stat").num_columns(2).spacing([16.0, 6.0]).striped(true).show(ui, |ui| {
-            let mut row = |ui: &mut egui::Ui, k: &str, v: &str| {
+            let row = |ui: &mut egui::Ui, k: &str, v: &str| {
                 ui.label(k);
                 ui.monospace(if v.is_empty() { "—" } else { v });
                 ui.end_row();

@@ -2,6 +2,8 @@
 //! the modem worker (back): the UI sends `Command`s, the backend replies with
 //! `Event`s. Nothing in the UI touches the modem directly.
 
+pub use zte_control::RotationOutcome;
+
 /// UI -> backend requests.
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -31,10 +33,12 @@ pub enum Command {
 /// backend -> UI notifications.
 #[derive(Debug, Clone)]
 pub enum Event {
-    Status(StatusSnapshot),
+    Status(Box<StatusSnapshot>),
     Log(String),
     Busy(bool),
-    RotationDone(String),
+    /// A rotation finished. The outcome says whether the public address is known
+    /// to have changed -- "the bearer came back" is not the same claim.
+    RotationDone(RotationOutcome),
     Error(String),
 }
 
@@ -61,7 +65,11 @@ impl StatusSnapshot {
     }
     /// Stable identity of the serving cell/tower, if any is reported.
     pub fn tower_key(&self) -> Option<String> {
-        if self.cell_id.is_empty() && self.pci.is_empty() {
+        let is_empty_or_zero = |s: &str| {
+            let t = s.trim();
+            t.is_empty() || t == "0" || t == "None" || t == "--"
+        };
+        if is_empty_or_zero(&self.cell_id) && is_empty_or_zero(&self.pci) {
             None
         } else {
             Some(format!("{}|{}|{}", self.cell_id, self.pci, self.earfcn))
@@ -70,7 +78,7 @@ impl StatusSnapshot {
 }
 
 /// A discovered serving cell ("tower"), accumulated as the modem camps on cells.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Tower {
     pub key: String,
     pub cell_id: String,
@@ -84,7 +92,7 @@ pub struct Tower {
 }
 
 /// One row of the connection history table.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnRow {
     pub ts: String,
     pub kind: String,
@@ -92,4 +100,32 @@ pub struct ConnRow {
     pub network: String,
     pub band: String,
     pub wan_ip: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_status_snapshot_connected() {
+        let mut st = StatusSnapshot::default();
+        assert!(!st.connected());
+        st.ppp = "ppp_connected".to_string();
+        assert!(st.connected());
+    }
+
+    #[test]
+    fn test_status_snapshot_tower_key() {
+        let mut st = StatusSnapshot::default();
+        assert_eq!(st.tower_key(), None);
+
+        st.cell_id = "0".to_string();
+        st.pci = "0".to_string();
+        assert_eq!(st.tower_key(), None);
+
+        st.cell_id = "4d82883".to_string();
+        st.pci = "120".to_string();
+        st.earfcn = "1650".to_string();
+        assert_eq!(st.tower_key(), Some("4d82883|120|1650".to_string()));
+    }
 }

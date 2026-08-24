@@ -37,19 +37,28 @@ impl AppModel {
                     });
                     self.cap_history();
                 }
-                self.status = s;
+                self.status = *s;
             }
             Event::Log(m) => self.push(m),
             Event::Busy(b) => self.busy = b,
-            Event::RotationDone(ip) => {
-                self.push(format!("Rotated → new IP {}", ip));
+            Event::RotationDone(outcome) => {
+                self.push(format!(
+                    "{} {}",
+                    if outcome.verified() { "Rotated →" } else { "Rotation incomplete:" },
+                    outcome.summary()
+                ));
+                // Only a real address updates `last_ip`; parking a placeholder
+                // there used to make the next genuine connect look like a repeat.
+                if let Some(ip) = outcome.ip() {
+                    self.last_ip = ip.to_string();
+                }
                 self.history.push(ConnRow {
                     ts: now_hms(),
-                    kind: "rotate".into(),
+                    kind: if outcome.verified() { "rotate".into() } else { "rotate (unverified)".into() },
                     operator: self.status.operator.clone(),
                     network: self.status.network_type.clone(),
                     band: self.status.band.clone(),
-                    wan_ip: ip,
+                    wan_ip: outcome.ip().unwrap_or_default().to_string(),
                 });
                 self.cap_history();
             }
@@ -240,7 +249,7 @@ impl eframe::App for Kernel {
         }
 
         // Handle system-tray menu clicks.
-        if let Ok(ev) = tray_icon::menu::MenuEvent::receiver().try_recv() {
+        while let Ok(ev) = tray_icon::menu::MenuEvent::receiver().try_recv() {
             if ev.id == self.tray_rotate {
                 let _ = self.tx.send(Command::Rotate);
             } else if ev.id == self.tray_show {
@@ -250,8 +259,10 @@ impl eframe::App for Kernel {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
-        // Periodic read-only status poll.
-        if self.last_poll.elapsed() >= Duration::from_secs(3) {
+        // Periodic read-only status poll. Skipped while the backend is busy: a
+        // rotation or band scan blocks the worker for tens of seconds, and polls
+        // queued during that window all fire in a burst once it returns.
+        if !self.model.busy && self.last_poll.elapsed() >= Duration::from_secs(3) {
             let _ = self.tx.send(Command::RefreshStatus);
             self.last_poll = Instant::now();
         }
@@ -306,5 +317,89 @@ impl eframe::App for Kernel {
 
         // Keep ticking so the periodic poll fires even without user input.
         ctx.request_repaint_after(Duration::from_millis(1000));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::RotationOutcome;
+
+    #[test]
+    fn test_app_model_apply_events() {
+        let mut model = AppModel::default();
+
+        // Initial status
+        let mut status = StatusSnapshot {
+            wan_ip: "10.0.0.1".to_string(),
+            operator: "Vodafone".to_string(),
+            network_type: "LTE".to_string(),
+            cell_id: "12345".to_string(),
+            pci: "42".to_string(),
+            earfcn: "1650".to_string(),
+            ..Default::default()
+        };
+
+        model.apply(Event::Status(Box::new(status.clone())));
+        assert_eq!(model.history.len(), 1);
+        assert_eq!(model.history[0].kind, "connect");
+        assert_eq!(model.history[0].wan_ip, "10.0.0.1");
+        assert_eq!(model.towers.len(), 1);
+        assert_eq!(model.towers[0].cell_id, "12345");
+
+        // Same status should not add duplicate history
+        model.apply(Event::Status(Box::new(status.clone())));
+        assert_eq!(model.history.len(), 1);
+        assert_eq!(model.towers[0].seen, 2);
+
+        // RotationDone should record rotate event and update last_ip
+        model.apply(Event::RotationDone(RotationOutcome::NewIp {
+            ip: "10.0.0.2".to_string(),
+            previous: Some("10.0.0.1".to_string()),
+            attempts: 1,
+        }));
+        assert_eq!(model.history.len(), 2);
+        assert_eq!(model.history[1].kind, "rotate");
+        assert_eq!(model.history[1].wan_ip, "10.0.0.2");
+
+        // Next status event with the new IP should not insert duplicate connect row
+        status.wan_ip = "10.0.0.2".to_string();
+        model.apply(Event::Status(Box::new(status)));
+        assert_eq!(model.history.len(), 2);
+    }
+
+    #[test]
+    fn test_unverified_rotation_is_not_recorded_as_a_new_ip() {
+        let mut model = AppModel {
+            last_ip: "10.0.0.1".to_string(),
+            ..Default::default()
+        };
+
+        // The bearer came back but the address was unreadable. This used to arrive
+        // as the literal string "connected" and be filed as if it were an IP.
+        model.apply(Event::RotationDone(RotationOutcome::BearerUpIpUnknown { attempts: 1 }));
+        assert_eq!(model.history.len(), 1);
+        assert_eq!(model.history[0].kind, "rotate (unverified)");
+        assert_eq!(model.history[0].wan_ip, "");
+        assert_eq!(model.last_ip, "10.0.0.1", "placeholder must not overwrite last_ip");
+
+        // ...so the next real address still registers as a fresh connection.
+        model.apply(Event::Status(Box::new(StatusSnapshot {
+            wan_ip: "10.0.0.7".to_string(),
+            ..Default::default()
+        })));
+        assert_eq!(model.history.len(), 2);
+        assert_eq!(model.history[1].wan_ip, "10.0.0.7");
+    }
+
+    #[test]
+    fn test_app_model_log_deduplication() {
+        let mut model = AppModel::default();
+        model.apply(Event::Log("Connecting...".to_string()));
+        model.apply(Event::Log("Connecting...".to_string()));
+        assert_eq!(model.log.len(), 1);
+
+        model.apply(Event::Log("Done.".to_string()));
+        assert_eq!(model.log.len(), 2);
     }
 }
