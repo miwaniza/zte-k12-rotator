@@ -71,6 +71,10 @@ pub enum Error {
     Transport { context: &'static str, source: reqwest::Error },
     /// The modem answered with something that is not the JSON we expect.
     Decode { context: &'static str, source: reqwest::Error },
+    /// Something answered, but it is not a ZTE WebUI. Usually another device
+    /// squatting the same address -- a home router on 192.168.0.1 and a
+    /// factory-reset modem on 192.168.0.1 are indistinguishable by address alone.
+    NotZteWebui { host: String, detail: String },
     /// A SET command needs a password and none is configured.
     NoPassword,
     /// The modem rejected the credentials.
@@ -90,6 +94,11 @@ impl std::fmt::Display for Error {
         match self {
             Error::Transport { context, source } => write!(f, "{}: {}", context, source),
             Error::Decode { context, source } => write!(f, "{}: malformed response ({})", context, source),
+            Error::NotZteWebui { host, detail } => write!(
+                f,
+                "{} answered, but it is not a ZTE WebUI ({}). Another device is probably using this address — check which interface the request went out of",
+                host, detail
+            ),
             Error::NoPassword => write!(f, "no password configured for WebUI authentication"),
             Error::AuthFailed(m) => write!(f, "authentication failed: {}", m),
             Error::CommandRejected { goform_id, result } => {
@@ -326,9 +335,28 @@ impl ZTEClient {
             source: e,
         })?;
 
-        resp.json().map_err(|e| Error::Decode {
+        // Read the body first so a non-JSON answer can be identified rather than
+        // reported as a generic decode failure. An HTML page here means some other
+        // device is on this address -- the case that actually happens is a home
+        // router and a factory-reset modem both sitting on 192.168.0.1.
+        let body = resp.text().map_err(|e| Error::Transport {
             context: "modem GET",
             source: e,
+        })?;
+
+        serde_json::from_str(&body).map_err(|e| {
+            let head = body.trim_start();
+            if head.starts_with('<') || head.to_ascii_lowercase().starts_with("<!doctype") {
+                Error::NotZteWebui {
+                    host: self.base_url.clone(),
+                    detail: "responded with an HTML page instead of JSON".to_string(),
+                }
+            } else {
+                Error::NotZteWebui {
+                    host: self.base_url.clone(),
+                    detail: format!("unparseable response: {}", e),
+                }
+            }
         })
     }
 
@@ -897,7 +925,14 @@ impl ZTEClient {
                     }
                     Err(e) => {
                         report.findings.push(format!("Cannot reach modem at {}: {}", self.base_url, e));
-                        report.recommendations.push(format!("Verify USB cable / RNDIS network adapter is connected and assigned an IP on {}", self.base_url));
+                        if matches!(e, Error::NotZteWebui { .. }) {
+                            report.recommendations.push(format!(
+                                "Another device is answering on {}. Find the modem's real address with `Get-NetIPConfiguration`, or bind to its interface with --bind-ip <the adapter's own IP>.",
+                                self.base_url
+                            ));
+                        } else {
+                            report.recommendations.push(format!("Verify USB cable / RNDIS network adapter is connected and assigned an IP on {}", self.base_url));
+                        }
                         return report;
                     }
                 }
