@@ -1,0 +1,17 @@
+[package]
+name = "zte-egui"
+version = "1.0.0"
+edition = "2021"
+description = "Native (egui) desktop UI for ZTE modem control — microkernel + modules over the zte-control core"
+authors = ["Dmytro Yemelianov"]
+
+[dependencies]
+eframe = "0.28"
+egui = "0.28"
+serde_json = "1"
+zte-control = { path = ".." }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
