@@ -360,8 +360,14 @@
       <button id="pwa-install-btn" class="btn-sm" style="display: none; background: #6e40c9; color: #fff; border-color: rgba(255,255,255,0.1);" onclick="installPWA()">📲 Встановити PWA</button>
     </div>
     <div class="header-right">
+      <input id="modem-host" data-tauri-only type="text" placeholder="http://192.168.8.1" title="Адреса модема (десктоп-режим)"
+             oninput="localStorage.setItem('zte_host', this.value); tauriConfigure()"
+             style="width:130px;padding:5px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.06);color:inherit;font-size:12px;">
+      <input id="modem-bindip" data-tauri-only type="text" placeholder="bind-IP (опц.)" title="Джерельний IP для прив'язки (десктоп-режим)"
+             oninput="localStorage.setItem('zte_bindip', this.value); tauriConfigure()"
+             style="width:110px;padding:5px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.06);color:inherit;font-size:12px;">
       <input id="modem-pwd" type="password" placeholder="Пароль WebUI" title="Пароль адміністратора WebUI модема (зберігається локально)"
-             oninput="localStorage.setItem('zte_password', this.value)"
+             oninput="localStorage.setItem('zte_password', this.value); tauriConfigure()"
              style="width:120px;padding:5px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.06);color:inherit;font-size:12px;">
       <button id="notif-toggle-btn" class="btn-sm" onclick="requestNotificationPermission()" title="Увімкнути нативні сповіщення Windows/OS">🔔 Сповіщення</button>
       <div style="display: flex; align-items: center; gap: 6px;">
@@ -740,6 +746,15 @@
       return el && el.value ? el.value.trim() : (localStorage.getItem("zte_password") || "");
     }
 
+    // Push the current host/password/bind-IP into the native core (Tauri only).
+    async function tauriConfigure() {
+      if (!IS_TAURI) return;
+      const host = (document.getElementById("modem-host")?.value || localStorage.getItem("zte_host") || "http://192.168.8.1").trim();
+      const password = getPassword();
+      const bindIp = (document.getElementById("modem-bindip")?.value || localStorage.getItem("zte_bindip") || "").trim();
+      try { await tauriInvoke("configure", { host, password, bindIp }); } catch (e) { log("Configure: " + e); }
+    }
+
     // Anti-CSRF token, firmware-adaptive. RD is fetched fresh (it rotates per SET).
     //   K12:    AD = sha256_upper( sha256_upper(wa_inner_version) + RD )
     //   MF920U: AD = md5_lower( md5_lower(wa_inner_version + cr_version) + RD )
@@ -752,13 +767,20 @@
       return md5Lower(md5Lower(FW_WA + FW_CR) + rd);
     }
 
+    // Dual-mode: under the Tauri desktop shell, call the native command (the Rust
+    // core handles auth/AD/cookie); in the browser, hit the modem via the proxy.
+    const IS_TAURI = !!(window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke);
+    function tauriInvoke(cmd, args) { return window.__TAURI__.core.invoke(cmd, args); }
+
     async function apiGet(cmd, multi = true) {
+      if (IS_TAURI) return await tauriInvoke("goform_get", { cmd, multi });
       const url = `${ROUTER_BASE}/goform/goform_get_cmd_process?cmd=${cmd}${multi ? "&multi_data=1" : ""}&isTest=false&_=${Date.now()}`;
       const res = await fetch(url, { headers: { "X-Requested-With": "XMLHttpRequest" } });
       return await res.json();
     }
 
     async function apiPost(goformId, params = {}) {
+      if (IS_TAURI) return await tauriInvoke("goform_post", { goformId, params });
       let ad = "";
       // LOGIN and SET_WEB_LANGUAGE take no AD token; everything else does.
       if (goformId !== "LOGIN" && goformId !== "SET_WEB_LANGUAGE") {
@@ -785,6 +807,11 @@
     }
 
     async function login() {
+      if (IS_TAURI) {
+        await tauriConfigure();
+        try { await tauriInvoke("ensure_login"); return true; }
+        catch (e) { log("Вхід не вдався: " + e); return false; }
+      }
       try {
         const pw = getPassword();
         if (!pw) { log("Введіть пароль WebUI модема у полі вгорі"); return false; }
@@ -1330,9 +1357,16 @@
     }
 
     saveTowerDatabase();
-    // Restore the saved WebUI password into the field.
-    { const _pw = localStorage.getItem("zte_password"), _el = document.getElementById("modem-pwd"); if (_pw && _el) _el.value = _pw; }
-    fetchStatus();
+    // Restore saved connection settings; hide desktop-only fields in the browser.
+    (function () {
+      const setVal = (id, key) => { const el = document.getElementById(id), v = localStorage.getItem(key); if (el && v) el.value = v; };
+      setVal("modem-pwd", "zte_password");
+      setVal("modem-host", "zte_host");
+      setVal("modem-bindip", "zte_bindip");
+      if (!IS_TAURI) document.querySelectorAll("[data-tauri-only]").forEach(el => el.style.display = "none");
+    })();
+    // In the desktop shell, configure the native core before the first poll.
+    (IS_TAURI ? tauriConfigure() : Promise.resolve()).then(() => fetchStatus());
     fetchGeoLocation().then(() => renderTimelineTable());
     checkForAppUpdates();
     updateNotificationButtonUI();
