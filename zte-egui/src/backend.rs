@@ -12,6 +12,10 @@ use crate::api::{Command, Event, StatusSnapshot};
 pub fn spawn(cmd_rx: Receiver<Command>, ev_tx: Sender<Event>, repaint: impl Fn() + Send + 'static) {
     std::thread::spawn(move || {
         let mut client = ZTEClient::new("http://192.168.8.1", "", None);
+        // True only after a login with the configured password succeeds. Gates
+        // auto re-login on the poll loop so a wrong/empty password is NEVER retried
+        // every tick (which would trip the modem's 5-try lockout in seconds).
+        let mut password_good = false;
         let log = |t: &Sender<Event>, m: String| {
             let _ = t.send(Event::Log(m));
         };
@@ -20,19 +24,36 @@ pub fn spawn(cmd_rx: Receiver<Command>, ev_tx: Sender<Event>, repaint: impl Fn()
             match cmd {
                 Command::Configure { host, password, bind_ip } => {
                     client = ZTEClient::new(&host, &password, bind_ip.as_deref());
-                    log(&ev_tx, format!("Connected to {}", host));
-                    if let Ok(s) = fetch_status(&client) {
+                    if password.is_empty() {
+                        password_good = false;
+                        log(&ev_tx, format!(
+                            "Connected to {} (read-only — enter a password for control & live IP/band)",
+                            host
+                        ));
+                    } else {
+                        // Log in exactly once, here.
+                        match client.ensure_logged_in() {
+                            Ok(()) => {
+                                password_good = true;
+                                log(&ev_tx, format!("Logged in to {}", host));
+                            }
+                            Err(e) => {
+                                password_good = false;
+                                let _ = ev_tx.send(Event::Error(format!("login failed ({}) — check the password", e)));
+                            }
+                        }
+                    }
+                    if let Ok(s) = fetch_status(&client, password_good) {
                         let _ = ev_tx.send(Event::Status(s));
                     }
                 }
-                Command::RefreshStatus => match fetch_status(&client) {
-                    Ok(s) => {
+                // Poll failures are transient and MUST NOT be logged (would spam);
+                // just skip this tick.
+                Command::RefreshStatus => {
+                    if let Ok(s) = fetch_status(&client, password_good) {
                         let _ = ev_tx.send(Event::Status(s));
                     }
-                    Err(e) => {
-                        let _ = ev_tx.send(Event::Error(e));
-                    }
-                },
+                }
                 Command::Rotate | Command::Reconnect => {
                     let _ = ev_tx.send(Event::Busy(true));
                     log(&ev_tx, "Rotating (band-hop + reconnect)…".into());
@@ -44,7 +65,7 @@ pub fn spawn(cmd_rx: Receiver<Command>, ev_tx: Sender<Event>, repaint: impl Fn()
                             let _ = ev_tx.send(Event::Error(e));
                         }
                     }
-                    if let Ok(s) = fetch_status(&client) {
+                    if let Ok(s) = fetch_status(&client, password_good) {
                         let _ = ev_tx.send(Event::Status(s));
                     }
                     let _ = ev_tx.send(Event::Busy(false));
@@ -57,7 +78,7 @@ pub fn spawn(cmd_rx: Receiver<Command>, ev_tx: Sender<Event>, repaint: impl Fn()
                             let _ = ev_tx.send(Event::Error(e));
                         }
                     }
-                    if let Ok(s) = fetch_status(&client) {
+                    if let Ok(s) = fetch_status(&client, password_good) {
                         let _ = ev_tx.send(Event::Status(s));
                     }
                     let _ = ev_tx.send(Event::Busy(false));
@@ -70,7 +91,7 @@ pub fn spawn(cmd_rx: Receiver<Command>, ev_tx: Sender<Event>, repaint: impl Fn()
                             let _ = ev_tx.send(Event::Error(e));
                         }
                     }
-                    if let Ok(s) = fetch_status(&client) {
+                    if let Ok(s) = fetch_status(&client, password_good) {
                         let _ = ev_tx.send(Event::Status(s));
                     }
                     let _ = ev_tx.send(Event::Busy(false));
@@ -99,12 +120,12 @@ pub fn spawn(cmd_rx: Receiver<Command>, ev_tx: Sender<Event>, repaint: impl Fn()
     });
 }
 
-fn fetch_status(client: &ZTEClient) -> Result<StatusSnapshot, String> {
-    // wan_ipaddr / wan_active_band / cell fields are auth-gated, so establish a
-    // session first (best-effort — pre-auth fields still read if login fails).
-    // Only attempt login when a password is set: empty-password login attempts
-    // every poll would burn the modem's 5-try lockout in seconds.
-    if !client.password.is_empty() {
+fn fetch_status(client: &ZTEClient, password_good: bool) -> Result<StatusSnapshot, String> {
+    // wan_ipaddr / wan_active_band / cell fields are auth-gated. Only refresh the
+    // session when the password is known-good (`ensure_logged_in` no-ops while the
+    // session is still valid, and re-logins succeed since the password is correct),
+    // so we never retry a bad password on the poll loop.
+    if password_good {
         let _ = client.ensure_logged_in();
     }
     let keys = "wa_inner_version,hardware_version,imei,network_provider,network_type,\

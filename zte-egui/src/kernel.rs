@@ -99,6 +99,10 @@ impl AppModel {
     }
 
     fn push(&mut self, m: String) {
+        // Skip consecutive duplicate lines so transient repeats don't flood the log.
+        if self.log.last().map(|l| l.as_str()) == Some(m.as_str()) {
+            return;
+        }
         self.log.push(m);
         let n = self.log.len();
         if n > 400 {
