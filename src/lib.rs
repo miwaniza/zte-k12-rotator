@@ -947,18 +947,38 @@ impl ZTEClient {
         let roam_str = g(&pre_map, &["roam_state", "roaming"]).to_lowercase();
         report.roaming = roam_str == "1" || roam_str == "roam" || roam_str == "true";
 
-        if report.login_lock_seconds > 0 {
-            report.findings.push(format!("WebUI login is currently locked (~{}s remaining). Too many failed password attempts.", report.login_lock_seconds));
-            report.recommendations.push("Wait until lockout expires before attempting login.".to_string());
-        } else if !self.password.is_empty() {
+        // `login_lock_time` is NOT a reliable "you are locked out" signal.
+        //
+        // Observed on BD_MACTEXPKMF920UV1.0.0B01: it reads ~300 and counts down
+        // immediately after a *successful* login, with no failed attempts
+        // anywhere in the sequence -- i.e. it behaves as a session timer on this
+        // firmware. Refusing to authenticate while it was non-zero meant that one
+        // good login silently downgraded every command for the next five minutes
+        // to read-only, and the report then blamed the SIM for the auth-gated
+        // fields it could no longer read.
+        //
+        // So: attempt the login and let the *result* decide. Exactly one attempt,
+        // so this cannot walk into a real lockout by retrying.
+        if self.has_password() {
             match self.ensure_logged_in() {
                 Ok(()) => {
                     report.authenticated = true;
                 }
                 Err(e) => {
                     report.auth_error = Some(e.to_string());
-                    report.findings.push(format!("WebUI authentication failed: {}", e));
-                    report.recommendations.push("Check that the configured admin password is correct.".to_string());
+                    if report.login_lock_seconds > 0 {
+                        report.findings.push(format!(
+                            "WebUI authentication failed and login_lock_time reads ~{}s, so the modem may be rate-limiting logins: {}",
+                            report.login_lock_seconds, e
+                        ));
+                        report.recommendations.push(
+                            "Wait for that timer to expire, then retry with the correct password."
+                                .to_string(),
+                        );
+                    } else {
+                        report.findings.push(format!("WebUI authentication failed: {}", e));
+                        report.recommendations.push("Check that the configured admin password is correct.".to_string());
+                    }
                 }
             }
         } else {

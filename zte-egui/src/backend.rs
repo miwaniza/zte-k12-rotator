@@ -52,15 +52,14 @@ pub fn spawn(cmd_rx: Receiver<Command>, ev_tx: Sender<Event>, repaint: impl Fn()
                             "Connected to {} (read-only — enter a password for control & live IP/band)",
                             host
                         ));
-                    } else if let Some(secs) = lock_seconds(&client) {
-                        // Attempting a login during a lockout only extends it, so don't.
-                        password_good = false;
-                        let _ = ev_tx.send(Event::Error(format!(
-                            "WebUI login is locked (~{}s left, too many attempts). Wait, then Connect again.",
-                            secs
-                        )));
                     } else {
                         // Log in exactly once, here.
+                        //
+                        // No `login_lock_time` pre-check: on MF920U-class firmware
+                        // that field counts down after a *successful* login, so
+                        // gating on it refused to authenticate for five minutes
+                        // after every good login. One attempt, and the result --
+                        // not a guess made beforehand -- decides.
                         match client.ensure_logged_in() {
                             Ok(()) => {
                                 password_good = true;
@@ -68,7 +67,14 @@ pub fn spawn(cmd_rx: Receiver<Command>, ev_tx: Sender<Event>, repaint: impl Fn()
                             }
                             Err(e) => {
                                 password_good = false;
-                                let _ = ev_tx.send(Event::Error(format!("login failed ({}) — check the password", e)));
+                                let hint = match lock_seconds(&client) {
+                                    Some(secs) => format!(
+                                        "login failed ({}) — login_lock_time reads ~{}s, so the modem may be rate-limiting; otherwise check the password",
+                                        e, secs
+                                    ),
+                                    None => format!("login failed ({}) — check the password", e),
+                                };
+                                let _ = ev_tx.send(Event::Error(hint));
                             }
                         }
                     }
