@@ -24,8 +24,13 @@ const ROTATION_MASKS: &[(&str, &str)] = &[
     ("Band 3 (1800 MHz)", "0x0000000000000004"),
     ("Band 7 (2600 MHz)", "0x0000000000000040"),
     ("Band 20 (800 MHz)", "0x0000000000080000"),
-    ("All Bands (Auto)",  "0x00000000000800c4"),
+    ("All Bands (Auto)",  "0xffffffffffffffff"),
 ];
+
+/// "All bands" masks, passed with `is_*_band=1` to re-enable every 2G/3G ("gw")
+/// and LTE band so the modem always has a usable RAT to camp on.
+const GW_BAND_ALL: &str = "0xffffffffffffffff";
+const LTE_BAND_ALL: &str = "0xffffffffffffffff";
 
 #[derive(Parser, Debug)]
 #[command(name = "zte-control", author, version = VERSION, about = "Universal Controller, IP & Region Rotator for ZTE K12 (ZX297520)")]
@@ -77,6 +82,10 @@ pub enum Commands {
         #[arg(short, long, help = "Automatically cycle RF connection")]
         reconnect: bool,
     },
+
+    /// Re-enable ALL bands (2G/3G + every LTE band) and clear locks -- recovers a
+    /// modem stuck in NO_SERVICE after a narrow band lock
+    UnlockBands,
 
     /// Force full band-hop + RF disconnect & reconnect to rotate IP & Region
     Reconnect,
@@ -382,26 +391,91 @@ impl ZTEClient {
         self.get_cmd(keys, true)
     }
 
+    /// Apply an LTE band selection while ALWAYS keeping 2G/3G ("gw") bands
+    /// enabled as a fallback. Sending `is_gw_band=0, gw_band_mask=0` (the old
+    /// behavior) could leave the modem with no usable RAT and strand it in
+    /// NO_SERVICE when the chosen LTE band has no coverage.
+    fn select_bands(&self, lte_mask: &str) -> Result<HashMap<String, serde_json::Value>, String> {
+        let mut params = HashMap::new();
+        params.insert("is_gw_band".to_string(), "1".to_string());
+        params.insert("gw_band_mask".to_string(), GW_BAND_ALL.to_string());
+        params.insert("is_lte_band".to_string(), "1".to_string());
+        params.insert("lte_band_mask".to_string(), lte_mask.to_string());
+        self.post_cmd("BAND_SELECT", params, true)
+    }
+
     pub fn lock_bands(&self, bands: &[String]) -> Result<String, String> {
         let mut mask: u64 = 0;
+        let mut all = false;
         for b in bands {
             let s = b.to_uppercase();
             if s == "B3" || s == "3" { mask |= 0x4; }
             else if s == "B7" || s == "7" { mask |= 0x40; }
             else if s == "B8" || s == "8" { mask |= 0x80; }
             else if s == "B20" || s == "20" { mask |= 0x80000; }
-            else if s == "ALL" { mask |= 0x800c4; }
+            else if s == "ALL" { all = true; }
         }
-
-        let hex_mask = format!("0x{:016x}", mask);
-        let mut params = HashMap::new();
-        params.insert("is_gw_band".to_string(), "0".to_string());
-        params.insert("gw_band_mask".to_string(), "0".to_string());
-        params.insert("is_lte_band".to_string(), "1".to_string());
-        params.insert("lte_band_mask".to_string(), hex_mask);
-
-        let res = self.post_cmd("BAND_SELECT", params, true)?;
+        // Empty/unrecognized selection is treated as ALL rather than "disable
+        // every LTE band", which would strand the modem.
+        let hex_mask = if all || mask == 0 {
+            LTE_BAND_ALL.to_string()
+        } else {
+            format!("0x{:016x}", mask)
+        };
+        let res = self.select_bands(&hex_mask)?;
         Ok(serde_json::to_string(&res).unwrap_or_default())
+    }
+
+    /// Recovery: re-enable ALL bands (2G/3G + every LTE band) and clear any cell
+    /// lock, returning the modem to unrestricted auto selection. Undoes a narrow
+    /// band lock that left it in NO_SERVICE.
+    pub fn unlock_bands(&self) -> Result<String, String> {
+        let _ = self.unlock_cell();
+        let res = self.select_bands(LTE_BAND_ALL)?;
+        Ok(serde_json::to_string(&res).unwrap_or_default())
+    }
+
+    /// Poll until the modem registers on some network (`network_type` present and
+    /// not NO_SERVICE/LIMITED_SERVICE). Dialing before this is a no-op, so the
+    /// heal path waits for it before issuing CONNECT_NETWORK.
+    fn wait_registered(&self, tries: u32) -> bool {
+        for _ in 0..tries {
+            if let Ok(st) = self.get_cmd("network_type", false) {
+                let nt = st.get("network_type").and_then(|v| v.as_str()).unwrap_or("");
+                if !nt.is_empty() && nt != "NO_SERVICE" && !nt.starts_with("LIMITED_SERVICE") {
+                    return true;
+                }
+            }
+            thread::sleep(Duration::from_secs(1));
+        }
+        false
+    }
+
+    /// Poll for a live bearer. Success is gated on `ppp_status == ppp_connected`,
+    /// which is readable without a web session. `wan_ipaddr` is auth-gated AND the
+    /// web session can drop during a bearer reset, so we do NOT gate on it (that
+    /// caused false "no bearer" failures); we re-auth best-effort only to report
+    /// the new IP.
+    fn wait_bearer(&self, tries: u32) -> Option<String> {
+        for _ in 0..tries {
+            thread::sleep(Duration::from_millis(1000));
+            let ppp = self
+                .get_cmd("ppp_status", false)
+                .ok()
+                .and_then(|m| m.get("ppp_status").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                .unwrap_or_default();
+            if ppp == "ppp_connected" {
+                let _ = self.ensure_logged_in();
+                let ip = self
+                    .get_cmd("wan_ipaddr", false)
+                    .ok()
+                    .and_then(|m| m.get("wan_ipaddr").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "connected".to_string());
+                return Some(ip);
+            }
+        }
+        None
     }
 
     pub fn lock_cell(&self, earfcn: u32, pci: u32) -> Result<String, String> {
@@ -430,13 +504,8 @@ impl ZTEClient {
         // 1. Clear cell lock
         let _ = self.unlock_cell();
 
-        // 2. Select target frequency band to force gateway handover
-        let mut p_band = HashMap::new();
-        p_band.insert("is_gw_band".to_string(), "0".to_string());
-        p_band.insert("gw_band_mask".to_string(), "0".to_string());
-        p_band.insert("is_lte_band".to_string(), "1".to_string());
-        p_band.insert("lte_band_mask".to_string(), band_mask.to_string());
-        let _ = self.post_cmd("BAND_SELECT", p_band, true);
+        // 2. Select target LTE band (keeps 2G/3G as fallback via select_bands)
+        let _ = self.select_bands(band_mask);
 
         // 3. Disconnect cellular session
         let mut p1 = HashMap::new();
@@ -451,18 +520,28 @@ impl ZTEClient {
         p2.insert("notCallback".to_string(), "true".to_string());
         let _ = self.post_cmd("CONNECT_NETWORK", p2, true);
 
-        // 6. Wait for PPP connected and return new IP
-        for _ in 0..8 {
-            thread::sleep(Duration::from_millis(1000));
-            if let Ok(st) = self.get_cmd("wan_ipaddr,ppp_status", false) {
-                let ppp = st.get("ppp_status").and_then(|v| v.as_str()).unwrap_or("");
-                let ip = st.get("wan_ipaddr").and_then(|v| v.as_str()).unwrap_or("");
-                if ppp == "ppp_connected" && !ip.is_empty() {
-                    return Ok(ip.to_string());
-                }
-            }
+        // 6. Wait for the bearer on the new band, or a 2G/3G fallback. Re-registration
+        //    after a forced band change takes ~10-20s (measured), so give it room.
+        if let Some(ip) = self.wait_bearer(20) {
+            return Ok(ip);
         }
-        Ok("reconnected".to_string())
+
+        // 7. Auto-heal: the target band may have no coverage here. Restore ALL bands
+        //    so the modem can re-register on anything (incl. 3G), and give a full
+        //    re-scan + register + auto-dial time. Guarantees a rotation can never
+        //    strand the modem in NO_SERVICE (which would take it out of the fleet).
+        println!("[!] bearer did not return on {}; restoring all bands", band_name);
+        let _ = self.unlock_bands();
+        // Register FIRST (on any RAT, incl. 3G), THEN dial -- issuing CONNECT while
+        // still NO_SERVICE is a no-op that wastes the window.
+        self.wait_registered(30);
+        let mut p3 = HashMap::new();
+        p3.insert("notCallback".to_string(), "true".to_string());
+        let _ = self.post_cmd("CONNECT_NETWORK", p3, true);
+        match self.wait_bearer(25) {
+            Some(ip) => Ok(ip),
+            None => Err("rotation failed: no bearer even after restoring all bands".to_string()),
+        }
     }
 }
 
@@ -814,7 +893,7 @@ pub struct ModemConfig {
 }
 
 fn default_dwell() -> u64 { 90 }
-fn default_solid_timeout() -> u64 { 45 }
+fn default_solid_timeout() -> u64 { 60 }
 
 const METRIC_ACTIVE: u32 = 10;
 const METRIC_STANDBY: u32 = 9000;
@@ -828,15 +907,16 @@ impl FleetModem {
     /// A modem is "solid" only if its bearer is up with a routable IP and, when a
     /// probe URL is configured, an actual request succeeds *through this modem*.
     fn is_solid(&self, probe: Option<&str>) -> bool {
-        let bearer_ok = match self.client.get_cmd("wan_ipaddr,ppp_status", false) {
-            Ok(m) => {
-                let ppp = m.get("ppp_status").and_then(|v| v.as_str()).unwrap_or("");
-                let ip = m.get("wan_ipaddr").and_then(|v| v.as_str()).unwrap_or("");
-                ppp == "ppp_connected" && !ip.is_empty()
-            }
-            Err(_) => false,
-        };
-        if !bearer_ok {
+        // ppp_status is readable without a web session; wan_ipaddr is auth-gated,
+        // so we don't rely on it here. The source-bound probe is the definitive
+        // "real internet" check.
+        let ppp = self
+            .client
+            .get_cmd("ppp_status", false)
+            .ok()
+            .and_then(|m| m.get("ppp_status").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .unwrap_or_default();
+        if ppp != "ppp_connected" {
             return false;
         }
         match probe {
@@ -1128,6 +1208,11 @@ fn main() {
                 }
             }
             Err(e) => eprintln!("[-] Error unlocking cell: {}", e),
+        },
+
+        Some(Commands::UnlockBands) => match client.unlock_bands() {
+            Ok(res) => println!("[+] All bands re-enabled (2G/3G + LTE), locks cleared: {}", res),
+            Err(e) => eprintln!("[-] Error re-enabling bands: {}", e),
         },
 
         Some(Commands::Reconnect) | Some(Commands::Rotate) => {
