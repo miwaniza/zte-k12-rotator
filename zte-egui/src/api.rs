@@ -47,10 +47,46 @@ pub struct StatusSnapshot {
     pub wan_ip: String,
     pub ppp: String,
     pub bands_mask: String,
+    pub cell_id: String,
+    pub pci: String,
+    pub earfcn: String,
 }
 
 impl StatusSnapshot {
     pub fn connected(&self) -> bool {
         self.ppp == "ppp_connected"
     }
+    /// Stable identity of the serving cell/tower, if any is reported.
+    pub fn tower_key(&self) -> Option<String> {
+        if self.cell_id.is_empty() && self.pci.is_empty() {
+            None
+        } else {
+            Some(format!("{}|{}|{}", self.cell_id, self.pci, self.earfcn))
+        }
+    }
+}
+
+/// A discovered serving cell ("tower"), accumulated as the modem camps on cells.
+#[derive(Debug, Clone, Default)]
+pub struct Tower {
+    pub key: String,
+    pub cell_id: String,
+    pub pci: String,
+    pub earfcn: String,
+    pub band: String,
+    pub rsrp: String,
+    pub network: String,
+    pub seen: u32,
+    pub last_ts: String,
+}
+
+/// One row of the connection history table.
+#[derive(Debug, Clone)]
+pub struct ConnRow {
+    pub ts: String,
+    pub kind: String,
+    pub operator: String,
+    pub network: String,
+    pub band: String,
+    pub wan_ip: String,
 }

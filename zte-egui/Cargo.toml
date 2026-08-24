@@ -9,6 +9,7 @@ authors = ["Dmytro Yemelianov"]
 eframe = "0.28"
 egui = "0.28"
 serde_json = "1"
+tray-icon = "0.19"
 zte-control = { path = ".." }
 
 [profile.release]

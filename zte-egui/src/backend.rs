@@ -101,7 +101,8 @@ pub fn spawn(cmd_rx: Receiver<Command>, ev_tx: Sender<Event>, repaint: impl Fn()
 
 fn fetch_status(client: &ZTEClient) -> Result<StatusSnapshot, String> {
     let keys = "wa_inner_version,hardware_version,imei,network_provider,network_type,\
-                network_lte_rsrp,lte_rsrp,lte_band_lock,wan_active_band,wan_ipaddr,ppp_status";
+                network_lte_rsrp,lte_rsrp,lte_band_lock,wan_active_band,wan_ipaddr,ppp_status,\
+                cell_id,network_cell_id,lte_pci,lte_earfcn,wan_active_channel";
     let m = client.get_cmd(keys, true)?;
     let g = |ks: &[&str]| get_first_non_empty(&m, ks, "").to_string();
     Ok(StatusSnapshot {
@@ -114,5 +115,8 @@ fn fetch_status(client: &ZTEClient) -> Result<StatusSnapshot, String> {
         wan_ip: g(&["wan_ipaddr"]),
         ppp: g(&["ppp_status"]),
         bands_mask: decode_bands(get_first_non_empty(&m, &["lte_band_lock"], "0x0")),
+        cell_id: g(&["cell_id", "network_cell_id"]),
+        pci: g(&["lte_pci"]),
+        earfcn: g(&["lte_earfcn", "wan_active_channel"]),
     })
 }
