@@ -13,3 +13,6 @@ scratch/
 sim-report.*
 sim-raw.*
 *-diagnostics.json
+diag-*.txt
+diag-*.json
+apn-fields.*

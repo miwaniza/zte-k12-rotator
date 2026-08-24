@@ -87,6 +87,22 @@ pub enum Commands {
     /// Band-hop + bearer reset, retrying up to 3 bands until the WAN IP is verified to have changed
     Rotate,
 
+    /// Read arbitrary WebUI fields through an authenticated session
+    ///
+    /// Most interesting fields (APN, dial mode, band mask, cell identifiers) are
+    /// auth-gated: querying them with plain curl returns empty strings rather
+    /// than an error, which reads as "this firmware has no such field".
+    Get {
+        #[arg(required = true, help = "Comma-separated field names")]
+        keys: String,
+
+        #[arg(long, help = "Output raw JSON instead of a table")]
+        json: bool,
+
+        #[arg(long, help = "List every field, including the empty ones")]
+        all: bool,
+    },
+
     /// Check for application updates from GitHub
     CheckUpdate,
 
@@ -693,6 +709,50 @@ fn main() {
             require_password(&password);
             if !report_rotation(client.rotate_and_reconnect()) {
                 std::process::exit(1);
+            }
+        }
+
+        Some(Commands::Get { keys, json, all }) => {
+            // Best-effort: read-only fields still come back without a session.
+            if !password.is_empty() {
+                if let Err(e) = client.ensure_logged_in() {
+                    eprintln!("[!] not authenticated ({}); auth-gated fields will be empty", e);
+                }
+            } else {
+                eprintln!("[!] no password set; auth-gated fields will be empty");
+            }
+            match client.get_cmd(&keys, true) {
+                Ok(map) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&map).unwrap_or_default());
+                    } else {
+                        let mut rows: Vec<(&String, String)> = map
+                            .iter()
+                            .map(|(k, v)| {
+                                let s = v.as_str().map(|s| s.to_string()).unwrap_or_else(|| v.to_string());
+                                (k, s)
+                            })
+                            .collect();
+                        rows.sort_by(|a, b| a.0.cmp(b.0));
+                        let width = rows.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+                        let mut shown = 0;
+                        for (k, v) in &rows {
+                            if v.is_empty() && !all {
+                                continue;
+                            }
+                            shown += 1;
+                            println!("{:<width$}  {}", k, if v.is_empty() { "(empty)" } else { v }, width = width);
+                        }
+                        let empty = rows.len() - shown;
+                        if empty > 0 && !all {
+                            println!("\n({} field(s) empty or unsupported — pass --all to list them)", empty);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[-] {}", e);
+                    std::process::exit(1);
+                }
             }
         }
 
