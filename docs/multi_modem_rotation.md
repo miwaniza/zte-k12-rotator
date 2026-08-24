@@ -51,7 +51,7 @@ The two modems authenticate differently; the tool already adapts (`is_k12_firmwa
 | Concern            | K12 / ZX297520                                  | MF920U (UFI family)                                        |
 | ------------------ | ----------------------------------------------- | ---------------------------------------------------------- |
 | Login              | `sha256(sha256(pw)+LD)`, LD challenge           | `Base64(pw)`, no challenge                                 |
-| AD (anti-CSRF)     | `sha256(sha256(wa_inner_version)+RD)`           | `md5(md5(wa_inner_version+cr_version)+RD)`                 |
+| AD (Request token) | `sha256(sha256(wa_inner_version)+RD)`           | `md5(md5(wa_inner_version+cr_version)+RD)`                 |
 | Session            | cookie (well-formed)                            | malformed `stok` cookie — captured & replayed manually     |
 | Session lifetime   | cookie                                          | **also keyed by client IP**; `ensure_logged_in` must hold the cookie, not trust `loginfo` |
 | Band lock          | `BAND_SELECT` / `LOCK_FREQUENCY`                | `BAND_SELECT` (backend-supported though not in its WebUI)  |

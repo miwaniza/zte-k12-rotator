@@ -3,3 +3,8 @@ scratch/
 .DS_Store
 *.swp
 *.bak
+
+# Build output. These used to be committed (~8.7 MB of .exe/.zip/.tar.gz) and
+# install.ps1 downloaded the blob straight off `main`; releases are published by
+# CI as GitHub Release assets instead.
+/dist

