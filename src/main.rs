@@ -133,6 +133,11 @@ pub enum ServiceAction {
     Stop,
 }
 
+/// Request-handling threads. Each blocks for the whole of a request, and a
+/// rotation can occupy one for minutes -- see `ZTEClient::rotate_verified`, which
+/// refuses concurrent rotations rather than letting them interleave.
+const NUM_WORKERS: usize = 4;
+
 /// The host part of an `Origin`/`Host` authority (`host`, `host:port`, `[::1]:port`).
 fn authority_host(authority: &str) -> &str {
     let a = authority.trim();
@@ -195,7 +200,7 @@ fn host_allowed(request: &tiny_http::Request, bind_host: &str) -> bool {
 struct Guard {
     /// Echoed back as `Access-Control-Allow-Origin`; `None` for same-origin and
     /// non-browser callers, which need no CORS header at all.
-    allow_origin: Option<String>,
+    cors: Option<String>,
     /// Set by the dashboard's XHR. A cross-origin page cannot set it without a
     /// preflight, and preflights from disallowed origins are refused -- so
     /// requiring it makes drive-by requests to the modem proxy impossible.
@@ -244,26 +249,23 @@ fn handle_http_request(
         return;
     }
 
-    let guard = match header_value(&request, "origin") {
-        Some(origin) if origin_allowed(origin) => Guard {
-            allow_origin: Some(origin.to_string()),
-            xhr: false,
-        },
+    let allow_origin = match header_value(&request, "origin") {
+        Some(origin) if origin_allowed(origin) => Some(origin.to_string()),
         // A cross-origin caller: refuse outright rather than answering with a
         // header that happens to be restrictive.
         Some(_) => {
             forbid(request, "cross-origin requests are not allowed");
             return;
         }
-        None => Guard { allow_origin: None, xhr: false },
+        None => None,
     };
     let guard = Guard {
+        cors: allow_origin,
         xhr: header_value(&request, "x-requested-with")
             .map(|v| v.eq_ignore_ascii_case("XMLHttpRequest"))
             .unwrap_or(false),
-        ..guard
     };
-    let cors = guard.allow_origin.clone();
+    let cors = guard.cors.clone();
 
     if *request.method() == Method::Options {
         // Reached only with an allowed origin (others were refused above).
@@ -329,7 +331,8 @@ fn handle_http_request(
                 "action": "rotated",
                 "verified": false,
                 "wan_ip": serde_json::Value::Null,
-                "detail": e,
+                "detail": e.to_string(),
+                "busy": matches!(e, zte_control::Error::RotationBusy),
             }),
         };
         let _ = request.respond(json_response(body.to_string(), cors.as_ref()));
@@ -340,7 +343,7 @@ fn handle_http_request(
                 "latest": latest,
                 "has_update": has_update,
             }),
-            Err(e) => serde_json::json!({ "error": e }),
+            Err(e) => serde_json::json!({ "error": e.to_string() }),
         };
         let _ = request.respond(json_response(body.to_string(), cors.as_ref()));
     } else if url_path.starts_with("/api/geo") {
@@ -364,46 +367,18 @@ fn handle_http_request(
             forbid(request, "missing X-Requested-With: XMLHttpRequest");
             return;
         }
-        let target_url = format!("{}{}", client.base_url, url_path);
-
-        let result_body = if *request.method() == Method::Post {
+        // Forwarding lives on ZTEClient (`forward_get` / `forward_post`), which
+        // owns the session cookie and the request headers. This used to reach
+        // into `client.client` and rebuild both by hand.
+        let forwarded = if *request.method() == Method::Post {
             let mut body_bytes = Vec::new();
             let _ = request.as_reader().read_to_end(&mut body_bytes);
-            let mut req = client
-                .client
-                .post(&target_url)
-                .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
-                .header("X-Requested-With", "XMLHttpRequest")
-                .header("Referer", format!("{}/index.html", client.base_url))
-                .body(body_bytes);
-            if let Some(cookie) = client.session_cookie() {
-                req = req.header("Cookie", cookie);
-            }
-            match req.send() {
-                Ok(r) => {
-                    // Capture the session cookie from a login forwarded through the
-                    // proxy, so subsequent forwarded SETs carry it (the cookie store
-                    // is disabled; see ZTEClient::session_cookie).
-                    client.capture_session_cookie(&r);
-                    r.text().unwrap_or_else(|e| proxy_error(&e.to_string()))
-                }
-                Err(e) => proxy_error(&e.to_string()),
-            }
+            client.forward_post(&url_path, body_bytes)
         } else {
-            let mut req = client
-                .client
-                .get(&target_url)
-                .header("X-Requested-With", "XMLHttpRequest")
-                .header("Referer", format!("{}/index.html", client.base_url));
-            if let Some(cookie) = client.session_cookie() {
-                req = req.header("Cookie", cookie);
-            }
-            match req.send().and_then(|r| r.text()) {
-                Ok(body) => body,
-                Err(e) => proxy_error(&e.to_string()),
-            }
+            client.forward_get(&url_path)
         };
 
+        let result_body = forwarded.unwrap_or_else(|e| proxy_error(&e.to_string()));
         let _ = request.respond(json_response(result_body, cors.as_ref()));
     } else {
         let response = Response::from_string(EMBEDDED_UI_HTML)
@@ -414,15 +389,37 @@ fn handle_http_request(
     }
 }
 
-pub fn run_ui_server(client: Arc<ZTEClient>, host: &str, port: u16, no_open: bool) -> Result<(), String> {
+/// Bind the dashboard listener. Split out from `run_ui_server` so tests can bind
+/// port 0 and exercise the request guards against a real socket.
+fn bind_server(host: &str, port: u16) -> Result<Arc<Server>, String> {
     let server_addr = format!("{}:{}", host, port);
-    let server = Server::http(&server_addr).map_err(|e| {
+    Server::http(&server_addr).map(Arc::new).map_err(|e| {
         format!(
             "cannot listen on {}: {}\n    (--host takes an IP address, e.g. 127.0.0.1; check the port is free)",
             server_addr, e
         )
-    })?;
-    let server = Arc::new(server);
+    })
+}
+
+/// Serve requests on `server` from `workers` threads until it is dropped.
+fn serve(server: Arc<Server>, client: Arc<ZTEClient>, http_client: Client, bind_host: &str, workers: usize) -> Vec<thread::JoinHandle<()>> {
+    (0..workers)
+        .map(|_| {
+            let server = Arc::clone(&server);
+            let client = Arc::clone(&client);
+            let http_client = http_client.clone();
+            let bind_host = bind_host.to_string();
+            thread::spawn(move || {
+                for request in server.incoming_requests() {
+                    handle_http_request(request, &client, &http_client, &bind_host);
+                }
+            })
+        })
+        .collect()
+}
+
+pub fn run_ui_server(client: Arc<ZTEClient>, host: &str, port: u16, no_open: bool) -> Result<(), String> {
+    let server = bind_server(host, port)?;
 
     println!("============================================================");
     println!("  🚀 ZTE K12 Master Web Controller & PWA v{} Started", VERSION);
@@ -447,23 +444,7 @@ pub fn run_ui_server(client: Arc<ZTEClient>, host: &str, port: u16, no_open: boo
         .build()
         .unwrap_or_else(|_| Client::new());
 
-    let mut handles = Vec::new();
-    let num_workers = 4;
-
-    for _ in 0..num_workers {
-        let server = Arc::clone(&server);
-        let client = Arc::clone(&client);
-        let http_client = http_client.clone();
-        let bind_host = host.to_string();
-        let handle = thread::spawn(move || {
-            for request in server.incoming_requests() {
-                handle_http_request(request, &client, &http_client, &bind_host);
-            }
-        });
-        handles.push(handle);
-    }
-
-    for handle in handles {
+    for handle in serve(server, client, http_client, host, NUM_WORKERS) {
         let _ = handle.join();
     }
     Ok(())
@@ -769,7 +750,7 @@ fn main() {
 
 /// Report a rotation without overstating it. Returns true when the public address
 /// is known to have changed.
-fn report_rotation(result: Result<zte_control::RotationOutcome, String>) -> bool {
+fn report_rotation(result: zte_control::Result<zte_control::RotationOutcome>) -> bool {
     match result {
         Ok(outcome) if outcome.verified() => {
             println!("[+] Cellular session rotated: {}", outcome.summary());
@@ -896,6 +877,187 @@ mod tests {
         assert!(origin_allowed("http://127.0.0.1:8080"));
         assert!(origin_allowed("http://localhost:8080"));
         assert!(origin_allowed("http://[::1]:8080"));
+    }
+
+    // ---------------------------------------------------------------------
+    // The request guards, against a real socket.
+    //
+    // These are the checks that stop a page the user happens to be visiting
+    // from driving the modem, and they were previously verified only by hand.
+    // ---------------------------------------------------------------------
+
+    /// A dashboard server on an ephemeral port. `base_url` points at it.
+    struct TestServer {
+        base_url: String,
+        _server: Arc<Server>,
+    }
+
+    fn test_server() -> TestServer {
+        let server = bind_server("127.0.0.1", 0).expect("bind ephemeral port");
+        // `to_ip()` rather than matching on ListenAddr: the enum has a Unix-socket
+        // variant only on unix, so a match arm for it is unreachable on Windows
+        // and required on Linux.
+        let port = server
+            .server_addr()
+            .to_ip()
+            .expect("test server listens on IP")
+            .port();
+        // Points at an address with nothing on it: these tests are about the
+        // guards, which all run before any modem traffic is attempted.
+        let client = Arc::new(ZTEClient::new("http://127.0.0.1:1", "", None));
+        let http_client = Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .expect("http client");
+        serve(Arc::clone(&server), client, http_client, "127.0.0.1", 1);
+        TestServer {
+            base_url: format!("http://127.0.0.1:{}", port),
+            _server: server,
+        }
+    }
+
+    fn agent() -> Client {
+        Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .expect("test agent")
+    }
+
+    #[test]
+    fn test_static_asset_served_to_same_origin() {
+        let s = test_server();
+        let res = agent()
+            .get(format!("{}/manifest.json", s.base_url))
+            .send()
+            .expect("request");
+        assert_eq!(res.status().as_u16(), 200);
+        // No CORS header at all for a same-origin caller -- not a wildcard.
+        assert!(res.headers().get("access-control-allow-origin").is_none());
+    }
+
+    #[test]
+    fn test_hostile_origin_is_refused_not_merely_unadvertised() {
+        let s = test_server();
+        for path in ["/manifest.json", "/goform/goform_get_cmd_process?cmd=imei", "/api/geo"] {
+            let res = agent()
+                .get(format!("{}{}", s.base_url, path))
+                .header("Origin", "https://evil.example")
+                .send()
+                .expect("request");
+            assert_eq!(res.status().as_u16(), 403, "{} should be refused", path);
+            assert!(
+                res.headers().get("access-control-allow-origin").is_none(),
+                "{} must not answer a hostile origin with any CORS header",
+                path
+            );
+        }
+    }
+
+    #[test]
+    fn test_lookalike_origin_is_refused() {
+        let s = test_server();
+        let res = agent()
+            .get(format!("{}/manifest.json", s.base_url))
+            .header("Origin", "http://127.0.0.1.evil.example")
+            .send()
+            .expect("request");
+        assert_eq!(res.status().as_u16(), 403);
+    }
+
+    #[test]
+    fn test_allowed_origin_gets_echoed_back() {
+        let s = test_server();
+        let res = agent()
+            .get(format!("{}/api/geo", s.base_url))
+            .header("Origin", "http://localhost:1234")
+            .send()
+            .expect("request");
+        assert_eq!(
+            res.headers()
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some("http://localhost:1234")
+        );
+    }
+
+    #[test]
+    fn test_rotate_rejects_drive_by_get() {
+        let s = test_server();
+        // The `<img src="...">` attack: a GET must not be able to rotate.
+        let res = agent()
+            .get(format!("{}/api/rotate", s.base_url))
+            .send()
+            .expect("request");
+        assert_eq!(res.status().as_u16(), 405);
+        assert_eq!(
+            res.headers().get("allow").and_then(|v| v.to_str().ok()),
+            Some("POST")
+        );
+    }
+
+    #[test]
+    fn test_mutating_endpoints_require_the_xhr_header() {
+        let s = test_server();
+        let res = agent()
+            .post(format!("{}/api/rotate", s.base_url))
+            .send()
+            .expect("request");
+        assert_eq!(res.status().as_u16(), 403);
+
+        let res = agent()
+            .get(format!("{}/goform/goform_get_cmd_process?cmd=imei", s.base_url))
+            .send()
+            .expect("request");
+        assert_eq!(res.status().as_u16(), 403);
+    }
+
+    #[test]
+    fn test_dns_rebinding_host_is_refused() {
+        let s = test_server();
+        // Arrives on loopback but carries an attacker-controlled Host.
+        let res = agent()
+            .get(format!("{}/manifest.json", s.base_url))
+            .header("Host", "evil.example")
+            .send()
+            .expect("request");
+        assert_eq!(res.status().as_u16(), 403);
+    }
+
+    #[test]
+    fn test_preflight_from_hostile_origin_is_refused() {
+        let s = test_server();
+        let res = agent()
+            .request(
+                reqwest::Method::OPTIONS,
+                format!("{}/goform/goform_set_cmd_process", s.base_url),
+            )
+            .header("Origin", "https://evil.example")
+            .header("Access-Control-Request-Method", "POST")
+            .send()
+            .expect("request");
+        assert_eq!(res.status().as_u16(), 403);
+        assert!(res.headers().get("access-control-allow-methods").is_none());
+    }
+
+    #[test]
+    fn test_preflight_from_allowed_origin_succeeds() {
+        let s = test_server();
+        let res = agent()
+            .request(
+                reqwest::Method::OPTIONS,
+                format!("{}/goform/goform_set_cmd_process", s.base_url),
+            )
+            .header("Origin", "http://127.0.0.1:9999")
+            .header("Access-Control-Request-Method", "POST")
+            .send()
+            .expect("request");
+        assert_eq!(res.status().as_u16(), 204);
+        assert_eq!(
+            res.headers()
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some("http://127.0.0.1:9999")
+        );
     }
 
     #[test]

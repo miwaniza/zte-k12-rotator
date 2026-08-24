@@ -1,5 +1,6 @@
 //! zte-control core: modem WebUI client, band/bearer control, and multi-modem
-//! fleet rotation. Shared by the CLI (`main.rs`) and the Tauri desktop app.
+//! fleet rotation. Shared by the CLI (`main.rs`) and the egui desktop app
+//! (`zte-egui`).
 
 use base64::Engine as _;
 use reqwest::blocking::Client;
@@ -7,9 +8,9 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, TryLockError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -17,17 +18,100 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// an address different from the one the modem held beforehand.
 pub const DEFAULT_ROTATE_ATTEMPTS: u32 = 3;
 
+// ---------------------------------------------------------------------------
+// Timing budgets
+//
+// These are WALL-CLOCK deadlines, not iteration counts. Counting iterations
+// (`for _ in 0..tries { sleep(1); http_get(); }`) ignores the request itself, so
+// against an unresponsive modem -- where every GET burns the full HTTP_TIMEOUT --
+// a "20 second" wait actually ran for over two minutes.
+// ---------------------------------------------------------------------------
+
+/// Per-request HTTP timeout for modem control traffic.
+const HTTP_TIMEOUT: Duration = Duration::from_secs(6);
+/// Gap between polls while waiting for the modem to reach a state.
+const POLL_INTERVAL: Duration = Duration::from_secs(1);
+/// How long to wait for the bearer after a band change. Re-registration on a new
+/// band takes ~10-20s (measured), so this leaves headroom.
+const BEARER_TIMEOUT: Duration = Duration::from_secs(25);
+/// How long to wait for the modem to register on *any* RAT during the heal path.
+const REGISTER_TIMEOUT: Duration = Duration::from_secs(30);
+/// Settle time after DISCONNECT so the PGW drops the old IP lease.
+const BEARER_DROP_SETTLE: Duration = Duration::from_millis(1600);
+
 /// Progress sink. Long operations (rotation, fleet cycles) report through this so
 /// a GUI -- which has no stdout to print to -- can show what is happening.
 pub type Logger = Arc<dyn Fn(&str) + Send + Sync>;
 
+/// The fields a status view needs. Declared once: this list was previously
+/// spelled out separately in `get_status`, in the diagnostics, and in the egui
+/// backend, and the copies had already drifted apart.
+pub const STATUS_KEYS: &str = "wa_inner_version,hardware_version,imei,network_provider,network_type,\
+     network_lte_rsrp,lte_rsrp,lte_rsrq,lte_snr,network_sinr,lte_rssi,lte_band_lock,wan_active_band,\
+     wan_active_channel,lte_earfcn,lte_pci,cell_id,network_cell_id,wan_ipaddr,ppp_status,\
+     strFullName,strShortName";
+
+/// Bands the rotation walks, in order.
+///
+/// "All bands" is deliberately NOT a step here: it is the recovery state (see
+/// `unlock_bands`), and hopping to it does not constrain the radio at all, so a
+/// retry that landed on it was unlikely to move the address.
 const ROTATION_MASKS: &[(&str, &str)] = &[
     ("Band 8 (900 MHz)",  "0x0000000000000080"),
     ("Band 3 (1800 MHz)", "0x0000000000000004"),
     ("Band 7 (2600 MHz)", "0x0000000000000040"),
     ("Band 20 (800 MHz)", "0x0000000000080000"),
-    ("All Bands (Auto)",  "0xffffffffffffffff"),
 ];
+
+/// What went wrong. Replaces the `String` errors this crate used to return, which
+/// callers could only inspect by matching on message text.
+#[derive(Debug)]
+pub enum Error {
+    /// The request never completed (cable out, wrong host, timeout).
+    Transport { context: &'static str, source: reqwest::Error },
+    /// The modem answered with something that is not the JSON we expect.
+    Decode { context: &'static str, source: reqwest::Error },
+    /// A SET command needs a password and none is configured.
+    NoPassword,
+    /// The modem rejected the credentials.
+    AuthFailed(String),
+    /// The modem accepted the request (HTTP 200) but reported failure in the body.
+    CommandRejected { goform_id: String, result: String },
+    /// Another rotation is already running against this modem.
+    RotationBusy,
+    /// The bearer never came back.
+    RotationFailed(String),
+    /// Bad fleet configuration, or a routing command that failed.
+    Config(String),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Transport { context, source } => write!(f, "{}: {}", context, source),
+            Error::Decode { context, source } => write!(f, "{}: malformed response ({})", context, source),
+            Error::NoPassword => write!(f, "no password configured for WebUI authentication"),
+            Error::AuthFailed(m) => write!(f, "authentication failed: {}", m),
+            Error::CommandRejected { goform_id, result } => {
+                write!(f, "modem rejected {}: result={}", goform_id, result)
+            }
+            Error::RotationBusy => write!(f, "a rotation is already in progress on this modem"),
+            Error::RotationFailed(m) => write!(f, "rotation failed: {}", m),
+            Error::Config(m) => write!(f, "{}", m),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Transport { source, .. } | Error::Decode { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 /// "All bands" masks, passed with `is_*_band=1` to re-enable every 2G/3G ("gw")
 /// and LTE band so the modem always has a usable RAT to camp on.
@@ -37,8 +121,13 @@ const LTE_BAND_ALL: &str = "0xffffffffffffffff";
 #[derive(Clone)]
 pub struct ZTEClient {
     pub base_url: String,
-    pub password: String,
-    pub client: Client,
+    /// Private: a public field handed the WebUI password to every consumer of the
+    /// crate. `has_password` is all callers actually needed.
+    password: String,
+    /// Private: `main.rs`'s dashboard proxy used to reach in here and build its
+    /// own requests, which put session handling outside the type that owns the
+    /// session. It goes through `forward_get` / `forward_post` instead.
+    client: Client,
     /// Captured session cookie (e.g. `stok=...`) replayed on every request.
     /// The MF920U sets a malformed cookie (`HttpOnly=1`, invalid `Expires`) that
     /// reqwest's cookie store silently drops, so we carry it manually instead.
@@ -48,8 +137,15 @@ pub struct ZTEClient {
     /// static, which made two modems in a fleet interleave one shared cycle
     /// instead of each walking the band list independently.
     band_cycle: Arc<AtomicUsize>,
+    /// Held for the duration of a rotation. Two concurrent rotations against one
+    /// modem would interleave their DISCONNECT/CONNECT/BAND_SELECT commands and
+    /// each other's band cursor -- reachable today from the tray button, a
+    /// scheduled script and the dashboard at the same time.
+    rotation_guard: Arc<Mutex<()>>,
     /// Where progress messages go; `println!` when unset (the CLI default).
-    logger: Arc<Mutex<Option<Logger>>>,
+    /// Shared with clones, immutable after construction -- so reporting a line
+    /// costs no lock.
+    logger: Option<Logger>,
 }
 
 /// Hand-written so the password is never printed by a `{:?}`.
@@ -69,7 +165,7 @@ impl ZTEClient {
         // so the built-in cookie store is disabled to avoid it clobbering our header.
         let mut builder = Client::builder()
             .cookie_store(false)
-            .timeout(Duration::from_secs(6));
+            .timeout(HTTP_TIMEOUT);
 
         if let Some(ip) = bind_ip.and_then(|s| s.parse::<IpAddr>().ok()) {
             builder = builder.local_address(ip);
@@ -84,21 +180,24 @@ impl ZTEClient {
             session_cookie: Arc::new(Mutex::new(None)),
             firmware_version_cache: Arc::new(Mutex::new(None)),
             band_cycle: Arc::new(AtomicUsize::new(0)),
-            logger: Arc::new(Mutex::new(None)),
+            rotation_guard: Arc::new(Mutex::new(())),
+            logger: None,
         }
     }
 
-    /// Route this client's progress messages somewhere other than stdout. Shared
-    /// with every clone of the client, so it can be set after construction.
-    pub fn set_logger(&self, sink: Logger) {
-        if let Ok(mut g) = self.logger.lock() {
-            *g = Some(sink);
-        }
+    /// Route this client's progress messages somewhere other than stdout.
+    pub fn with_logger(mut self, sink: Logger) -> Self {
+        self.logger = Some(sink);
+        self
+    }
+
+    /// True when a password is configured, i.e. SET commands are possible.
+    pub fn has_password(&self) -> bool {
+        !self.password.is_empty()
     }
 
     fn log(&self, msg: &str) {
-        let sink = self.logger.lock().ok().and_then(|g| g.clone());
-        match sink {
+        match &self.logger {
             Some(f) => f(msg),
             None => println!("{}", msg),
         }
@@ -109,21 +208,35 @@ impl ZTEClient {
         self.session_cookie.lock().ok().and_then(|g| g.as_ref().cloned())
     }
 
-    /// Capture the session cookie (first `name=value` pair) from a login response's
-    /// `Set-Cookie` header(s). Firmware-agnostic: works for the MF920U's `stok` and
-    /// any other ZTE session cookie name.
+    /// Capture the session cookie from a login response's `Set-Cookie` header(s).
+    ///
+    /// Prefers a known session cookie name and only falls back to "the first pair
+    /// we saw". Taking the first pair unconditionally meant that any unrelated
+    /// cookie emitted ahead of the session one (a language or theme preference)
+    /// would be captured instead, after which every SET failed with no clue why.
     pub fn capture_session_cookie(&self, resp: &reqwest::blocking::Response) {
+        const SESSION_NAMES: &[&str] = &["stok", "sessionid", "jsessionid", "sid", "_sid"];
+
+        let mut fallback: Option<String> = None;
         for hv in resp.headers().get_all(reqwest::header::SET_COOKIE).iter() {
-            if let Ok(s) = hv.to_str() {
-                if let Some(pair) = s.split(';').next().map(|p| p.trim()) {
-                    if pair.contains('=') {
-                        if let Ok(mut g) = self.session_cookie.lock() {
-                            *g = Some(pair.to_string());
-                        }
-                        return;
-                    }
-                }
+            let Ok(s) = hv.to_str() else { continue };
+            let Some(pair) = s.split(';').next().map(|p| p.trim()) else { continue };
+            let Some((name, _)) = pair.split_once('=') else { continue };
+
+            if SESSION_NAMES.iter().any(|n| name.eq_ignore_ascii_case(n)) {
+                self.store_cookie(pair);
+                return;
             }
+            fallback.get_or_insert_with(|| pair.to_string());
+        }
+        if let Some(pair) = fallback {
+            self.store_cookie(&pair);
+        }
+    }
+
+    fn store_cookie(&self, pair: &str) {
+        if let Ok(mut g) = self.session_cookie.lock() {
+            *g = Some(pair.to_string());
         }
     }
 
@@ -171,7 +284,34 @@ impl ZTEClient {
         self.firmware_version().contains("K12")
     }
 
-    pub fn get_cmd(&self, cmd: &str, multi: bool) -> Result<HashMap<String, serde_json::Value>, String> {
+    /// A GET against the modem WebUI carrying our session, headers and Referer.
+    fn get_request(&self, url: &str) -> reqwest::blocking::RequestBuilder {
+        let mut req = self
+            .client
+            .get(url)
+            .header("X-Requested-With", "XMLHttpRequest")
+            .header("Referer", format!("{}/index.html", self.base_url));
+        if let Some(cookie) = self.session_cookie() {
+            req = req.header("Cookie", cookie);
+        }
+        req
+    }
+
+    /// As `get_request`, for form POSTs.
+    fn post_request(&self, url: &str) -> reqwest::blocking::RequestBuilder {
+        let mut req = self
+            .client
+            .post(url)
+            .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+            .header("X-Requested-With", "XMLHttpRequest")
+            .header("Referer", format!("{}/index.html", self.base_url));
+        if let Some(cookie) = self.session_cookie() {
+            req = req.header("Cookie", cookie);
+        }
+        req
+    }
+
+    pub fn get_cmd(&self, cmd: &str, multi: bool) -> Result<HashMap<String, serde_json::Value>> {
         let multi_flag = if multi { "&multi_data=1" } else { "" };
         let url = format!(
             "{}/goform/goform_get_cmd_process?cmd={}{}&isTest=false&_={}",
@@ -181,20 +321,39 @@ impl ZTEClient {
             chrono_ms()
         );
 
-        let mut req = self
-            .client
-            .get(&url)
-            .header("X-Requested-With", "XMLHttpRequest")
-            .header("Referer", format!("{}/index.html", self.base_url));
-        if let Some(cookie) = self.session_cookie() {
-            req = req.header("Cookie", cookie);
-        }
-        let resp = req.send().map_err(|e| format!("HTTP GET error: {}", e))?;
+        let resp = self.get_request(&url).send().map_err(|e| Error::Transport {
+            context: "modem GET",
+            source: e,
+        })?;
 
-        let json_map: HashMap<String, serde_json::Value> = resp
-            .json()
-            .map_err(|e| format!("JSON decode error: {}", e))?;
-        Ok(json_map)
+        resp.json().map_err(|e| Error::Decode {
+            context: "modem GET",
+            source: e,
+        })
+    }
+
+    /// Forward a raw `/goform/...` GET and return the body verbatim. Used by the
+    /// dashboard proxy so that session handling stays inside this type.
+    pub fn forward_get(&self, path: &str) -> Result<String> {
+        let url = format!("{}{}", self.base_url, path);
+        self.get_request(&url)
+            .send()
+            .and_then(|r| r.text())
+            .map_err(|e| Error::Transport { context: "proxy GET", source: e })
+    }
+
+    /// Forward a raw `/goform/...` form POST. Captures any session cookie the
+    /// modem hands back, so a login performed through the proxy authenticates
+    /// this client too.
+    pub fn forward_post(&self, path: &str, body: Vec<u8>) -> Result<String> {
+        let url = format!("{}{}", self.base_url, path);
+        let resp = self
+            .post_request(&url)
+            .body(body)
+            .send()
+            .map_err(|e| Error::Transport { context: "proxy POST", source: e })?;
+        self.capture_session_cookie(&resp);
+        resp.text().map_err(|e| Error::Transport { context: "proxy POST", source: e })
     }
 
     /// Request authentication token (AD) required by sensitive SET commands. Both firmware families
@@ -205,7 +364,7 @@ impl ZTEClient {
     ///
     /// The version is read live from the device rather than hardcoded, so a firmware
     /// revision bump does not silently break the token.
-    pub fn get_ad_token(&self) -> Result<String, String> {
+    pub fn get_ad_token(&self) -> Result<String> {
         let ver = self.get_cmd("wa_inner_version,cr_version", true)?;
         let mut wa = ver
             .get("wa_inner_version")
@@ -228,7 +387,11 @@ impl ZTEClient {
             .unwrap_or("")
             .to_string();
 
-        let ad = if self.is_k12_firmware() || wa.contains("K12") {
+        // `wa` was just read from the device, so answer from it. Calling
+        // `is_k12_firmware()` first could miss the firmware cache and spend a
+        // whole extra round-trip re-reading the field we are holding.
+        let is_k12 = if wa.is_empty() { self.is_k12_firmware() } else { wa.contains("K12") };
+        let ad = if is_k12 {
             let fw_hash = Self::sha256_hex_upper(&wa);
             Self::sha256_hex_upper(&format!("{}{}", fw_hash, rd))
         } else {
@@ -238,7 +401,7 @@ impl ZTEClient {
         Ok(ad)
     }
 
-    pub fn login(&self) -> Result<bool, String> {
+    pub fn login(&self) -> Result<bool> {
         let url = format!("{}/goform/goform_set_cmd_process", self.base_url);
         let mut params = HashMap::new();
         params.insert("isTest".to_string(), "false".to_string());
@@ -266,31 +429,33 @@ impl ZTEClient {
         }
 
         let resp = self
-            .client
-            .post(&url)
-            .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
-            .header("X-Requested-With", "XMLHttpRequest")
-            .header("Referer", format!("{}/index.html", self.base_url))
+            .post_request(&url)
             .form(&params)
             .send()
-            .map_err(|e| format!("Login POST error: {}", e))?;
+            .map_err(|e| Error::Transport { context: "login POST", source: e })?;
 
         // Capture the session cookie before the body consumes the response.
         self.capture_session_cookie(&resp);
 
         let res_map: HashMap<String, serde_json::Value> = resp
             .json()
-            .map_err(|e| format!("JSON decode error: {}", e))?;
+            .map_err(|e| Error::Decode { context: "login POST", source: e })?;
 
+        // `0` is a plain success. `4` is accepted as "session already established"
+        // -- this is inherited behaviour and has NOT been confirmed against ZTE
+        // documentation; if a login ever appears to succeed while SETs keep
+        // failing, this is the first thing to re-check on real hardware.
+        const RESULT_OK: &str = "0";
+        const RESULT_ALREADY_LOGGED_IN: &str = "4";
         if let Some(r) = res_map.get("result").and_then(|v| v.as_str()) {
-            if r == "0" || r == "4" {
+            if r == RESULT_OK || r == RESULT_ALREADY_LOGGED_IN {
                 return Ok(true);
             }
         }
         Ok(false)
     }
 
-    pub fn ensure_logged_in(&self) -> Result<(), String> {
+    pub fn ensure_logged_in(&self) -> Result<()> {
         // A session is only usable if we actually hold its cookie. The modem reports
         // loginfo="ok" for any caller from an already-logged-in client IP -- even one
         // with no cookie -- but SET commands still require the cookie. So trust
@@ -303,16 +468,55 @@ impl ZTEClient {
                 return Ok(());
             }
         }
-        if self.password.is_empty() {
-            return Err("No password configured for WebUI authentication".to_string());
+        if !self.has_password() {
+            return Err(Error::NoPassword);
         }
         if !self.login()? {
-            return Err("Failed to authenticate to ZTE WebUI".to_string());
+            return Err(Error::AuthFailed(
+                "modem did not accept the configured password".to_string(),
+            ));
         }
         Ok(())
     }
 
-    pub fn post_cmd(&self, goform_id: &str, mut params: HashMap<String, String>, with_ad: bool) -> Result<HashMap<String, serde_json::Value>, String> {
+    /// A SET is only successful if the *body* says so.
+    ///
+    /// The goform endpoint answers HTTP 200 with `{"result":"failure"}` for a
+    /// rejected command, so a transport-level `Ok` proves nothing. Nothing in this
+    /// crate used to look at the body, which meant a band change refused for a
+    /// stale AD token was indistinguishable from one that worked.
+    ///
+    /// Only an explicitly negative `result` is treated as failure: some commands
+    /// answer with an unrelated shape, and rejecting those would invent errors.
+    fn check_set_result(
+        goform_id: &str,
+        body: &HashMap<String, serde_json::Value>,
+    ) -> Result<()> {
+        let Some(result) = body.get("result") else { return Ok(()) };
+        let text = match result {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        let failed = matches!(
+            text.trim().to_ascii_lowercase().as_str(),
+            "failure" | "fail" | "failed" | "error" | "1"
+        );
+        if failed {
+            Err(Error::CommandRejected {
+                goform_id: goform_id.to_string(),
+                result: text,
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn post_cmd(
+        &self,
+        goform_id: &str,
+        mut params: HashMap<String, String>,
+        with_ad: bool,
+    ) -> Result<HashMap<String, serde_json::Value>> {
         self.ensure_logged_in()?;
 
         if with_ad {
@@ -324,35 +528,29 @@ impl ZTEClient {
         params.insert("goformId".to_string(), goform_id.to_string());
 
         let url = format!("{}/goform/goform_set_cmd_process", self.base_url);
-        let mut req = self
-            .client
-            .post(&url)
-            .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
-            .header("X-Requested-With", "XMLHttpRequest")
-            .header("Referer", format!("{}/index.html", self.base_url))
-            .form(&params);
-        if let Some(cookie) = self.session_cookie() {
-            req = req.header("Cookie", cookie);
-        }
-        let resp = req.send().map_err(|e| format!("POST command error: {}", e))?;
+        let resp = self
+            .post_request(&url)
+            .form(&params)
+            .send()
+            .map_err(|e| Error::Transport { context: "modem SET", source: e })?;
 
         let res_map: HashMap<String, serde_json::Value> = resp
             .json()
-            .map_err(|e| format!("JSON response error: {}", e))?;
+            .map_err(|e| Error::Decode { context: "modem SET", source: e })?;
+        Self::check_set_result(goform_id, &res_map)?;
         Ok(res_map)
     }
 
-    pub fn get_status(&self) -> Result<HashMap<String, serde_json::Value>, String> {
+    pub fn get_status(&self) -> Result<HashMap<String, serde_json::Value>> {
         let _ = self.ensure_logged_in();
-        let keys = "wa_inner_version,hardware_version,imei,network_provider,network_type,network_lte_rsrp,lte_rsrp,lte_rsrq,lte_snr,network_sinr,lte_rssi,lte_band_lock,wan_active_band,wan_active_channel,lte_pci,cell_id,network_cell_id,wan_ipaddr,ppp_status,strFullName,strShortName";
-        self.get_cmd(keys, true)
+        self.get_cmd(STATUS_KEYS, true)
     }
 
     /// Apply an LTE band selection while ALWAYS keeping 2G/3G ("gw") bands
     /// enabled as a fallback. Sending `is_gw_band=0, gw_band_mask=0` (the old
     /// behavior) could leave the modem with no usable RAT and strand it in
     /// NO_SERVICE when the chosen LTE band has no coverage.
-    fn select_bands(&self, lte_mask: &str) -> Result<HashMap<String, serde_json::Value>, String> {
+    fn select_bands(&self, lte_mask: &str) -> Result<HashMap<String, serde_json::Value>> {
         let mut params = HashMap::new();
         params.insert("is_gw_band".to_string(), "1".to_string());
         params.insert("gw_band_mask".to_string(), GW_BAND_ALL.to_string());
@@ -361,7 +559,7 @@ impl ZTEClient {
         self.post_cmd("BAND_SELECT", params, true)
     }
 
-    pub fn lock_bands(&self, bands: &[String]) -> Result<String, String> {
+    pub fn lock_bands(&self, bands: &[String]) -> Result<String> {
         let mut mask: u64 = 0;
         let mut all = false;
         for b in bands {
@@ -386,7 +584,7 @@ impl ZTEClient {
     /// Recovery: re-enable ALL bands (2G/3G + every LTE band) and clear any cell
     /// lock, returning the modem to unrestricted auto selection. Undoes a narrow
     /// band lock that left it in NO_SERVICE.
-    pub fn unlock_bands(&self) -> Result<String, String> {
+    pub fn unlock_bands(&self) -> Result<String> {
         let _ = self.unlock_cell();
         let res = self.select_bands(LTE_BAND_ALL)?;
         Ok(serde_json::to_string(&res).unwrap_or_default())
@@ -395,17 +593,15 @@ impl ZTEClient {
     /// Poll until the modem registers on some network (`network_type` present and
     /// not NO_SERVICE/LIMITED_SERVICE). Dialing before this is a no-op, so the
     /// heal path waits for it before issuing CONNECT_NETWORK.
-    fn wait_registered(&self, tries: u32) -> bool {
-        for _ in 0..tries {
-            if let Ok(st) = self.get_cmd("network_type", false) {
-                let nt = st.get("network_type").and_then(|v| v.as_str()).unwrap_or("");
-                if !nt.is_empty() && nt != "NO_SERVICE" && !nt.starts_with("LIMITED_SERVICE") {
-                    return true;
-                }
-            }
-            thread::sleep(Duration::from_secs(1));
-        }
-        false
+    fn wait_registered(&self, timeout: Duration) -> bool {
+        poll_until(timeout, || {
+            let st = self.get_cmd("network_type", false).ok()?;
+            let nt = st.get("network_type").and_then(|v| v.as_str()).unwrap_or("");
+            let registered =
+                !nt.is_empty() && nt != "NO_SERVICE" && !nt.starts_with("LIMITED_SERVICE");
+            registered.then_some(())
+        })
+        .is_some()
     }
 
     /// The WAN address the modem currently holds, if a session can read it.
@@ -430,22 +626,18 @@ impl ZTEClient {
     /// `None` = no bearer came back. `Some(None)` = the bearer is up but its
     /// address could not be read; the two are deliberately distinct so a caller
     /// never reports an unverifiable rotation as a successful one.
-    fn wait_bearer(&self, tries: u32) -> Option<Option<String>> {
-        for _ in 0..tries {
-            thread::sleep(Duration::from_millis(1000));
+    fn wait_bearer(&self, timeout: Duration) -> Option<Option<String>> {
+        poll_until(timeout, || {
             let ppp = self
                 .get_cmd("ppp_status", false)
                 .ok()
                 .and_then(|m| m.get("ppp_status").and_then(|v| v.as_str()).map(|s| s.to_string()))
                 .unwrap_or_default();
-            if ppp == "ppp_connected" {
-                return Some(self.read_wan_ip());
-            }
-        }
-        None
+            (ppp == "ppp_connected").then(|| self.read_wan_ip())
+        })
     }
 
-    pub fn lock_cell(&self, earfcn: u32, pci: u32) -> Result<String, String> {
+    pub fn lock_cell(&self, earfcn: u32, pci: u32) -> Result<String> {
         let mut params = HashMap::new();
         params.insert("lte_earfcn_lock".to_string(), earfcn.to_string());
         params.insert("lte_pci_lock".to_string(), pci.to_string());
@@ -454,7 +646,7 @@ impl ZTEClient {
         Ok(serde_json::to_string(&res).unwrap_or_default())
     }
 
-    pub fn unlock_cell(&self) -> Result<String, String> {
+    pub fn unlock_cell(&self) -> Result<String> {
         let mut params = HashMap::new();
         params.insert("lte_earfcn_lock".to_string(), "0".to_string());
         params.insert("lte_pci_lock".to_string(), "0".to_string());
@@ -465,9 +657,18 @@ impl ZTEClient {
     /// Point the modem at ONE LTE band, for tower discovery. Goes through
     /// `select_bands`, so 2G/3G stay enabled and an interrupted scan can never
     /// leave the modem with no RAT to camp on.
-    pub fn scan_band(&self, lte_mask: &str) -> Result<(), String> {
+    pub fn scan_band(&self, lte_mask: &str) -> Result<()> {
         let _ = self.unlock_cell();
         self.select_bands(lte_mask).map(|_| ())
+    }
+
+    /// Run a step of a rotation, reporting rather than swallowing a rejection.
+    /// These were `let _ = ...`, so a BAND_SELECT the modem refused turned the
+    /// "band hop" into a plain bearer bounce with nothing in the log to say so.
+    fn rotation_step(&self, what: &str, outcome: Result<impl Sized>) {
+        if let Err(e) = outcome {
+            self.log(&format!("[!] {} failed: {}", what, e));
+        }
     }
 
     /// One band-hop + carrier bearer reset.
@@ -475,33 +676,35 @@ impl ZTEClient {
     /// `Ok(Some(ip))` -- bearer returned and its address was read.
     /// `Ok(None)`     -- bearer returned but the address is unreadable.
     /// `Err(_)`       -- no bearer came back, even after restoring all bands.
-    fn rotate_once(&self) -> Result<Option<String>, String> {
+    fn rotate_once(&self) -> Result<Option<String>> {
         let idx = self.band_cycle.fetch_add(1, Ordering::SeqCst) % ROTATION_MASKS.len();
         let (band_name, band_mask) = ROTATION_MASKS[idx];
         self.log(&format!("[*] Rotating to frequency {}: mask {}", band_name, band_mask));
 
         // 1. Clear cell lock
-        let _ = self.unlock_cell();
+        self.rotation_step("clearing cell lock", self.unlock_cell());
 
         // 2. Select target LTE band (keeps 2G/3G as fallback via select_bands)
-        let _ = self.select_bands(band_mask);
+        self.rotation_step(
+            &format!("selecting {}", band_name),
+            self.select_bands(band_mask),
+        );
 
         // 3. Disconnect cellular session
         let mut p1 = HashMap::new();
         p1.insert("notCallback".to_string(), "true".to_string());
-        let _ = self.post_cmd("DISCONNECT_NETWORK", p1, true);
+        self.rotation_step("DISCONNECT_NETWORK", self.post_cmd("DISCONNECT_NETWORK", p1, true));
 
         // 4. Guard sleep so PGW drops old IP lease
-        thread::sleep(Duration::from_millis(1600));
+        thread::sleep(BEARER_DROP_SETTLE);
 
         // 5. Connect cellular session
         let mut p2 = HashMap::new();
         p2.insert("notCallback".to_string(), "true".to_string());
-        let _ = self.post_cmd("CONNECT_NETWORK", p2, true);
+        self.rotation_step("CONNECT_NETWORK", self.post_cmd("CONNECT_NETWORK", p2, true));
 
-        // 6. Wait for the bearer on the new band, or a 2G/3G fallback. Re-registration
-        //    after a forced band change takes ~10-20s (measured), so give it room.
-        if let Some(ip) = self.wait_bearer(20) {
+        // 6. Wait for the bearer on the new band, or a 2G/3G fallback.
+        if let Some(ip) = self.wait_bearer(BEARER_TIMEOUT) {
             return Ok(ip);
         }
 
@@ -510,16 +713,18 @@ impl ZTEClient {
         //    re-scan + register + auto-dial time. Guarantees a rotation can never
         //    strand the modem in NO_SERVICE (which would take it out of the fleet).
         self.log(&format!("[!] bearer did not return on {}; restoring all bands", band_name));
-        let _ = self.unlock_bands();
+        self.rotation_step("restoring all bands", self.unlock_bands());
         // Register FIRST (on any RAT, incl. 3G), THEN dial -- issuing CONNECT while
         // still NO_SERVICE is a no-op that wastes the window.
-        self.wait_registered(30);
+        self.wait_registered(REGISTER_TIMEOUT);
         let mut p3 = HashMap::new();
         p3.insert("notCallback".to_string(), "true".to_string());
-        let _ = self.post_cmd("CONNECT_NETWORK", p3, true);
-        match self.wait_bearer(25) {
+        self.rotation_step("CONNECT_NETWORK (heal)", self.post_cmd("CONNECT_NETWORK", p3, true));
+        match self.wait_bearer(BEARER_TIMEOUT) {
             Some(ip) => Ok(ip),
-            None => Err("rotation failed: no bearer even after restoring all bands".to_string()),
+            None => Err(Error::RotationFailed(
+                "no bearer even after restoring all bands".to_string(),
+            )),
         }
     }
 
@@ -527,29 +732,52 @@ impl ZTEClient {
     /// from the one held before the rotation, up to `DEFAULT_ROTATE_ATTEMPTS`
     /// hops. Each retry advances to the next band, so a carrier that pins one
     /// address per band still gets away from the old one.
-    pub fn rotate_and_reconnect(&self) -> Result<RotationOutcome, String> {
+    pub fn rotate_and_reconnect(&self) -> Result<RotationOutcome> {
         self.rotate_verified(DEFAULT_ROTATE_ATTEMPTS)
     }
 
     /// `rotate_and_reconnect` with an explicit hop budget.
-    pub fn rotate_verified(&self, max_attempts: u32) -> Result<RotationOutcome, String> {
+    ///
+    /// Refuses to start (`Error::RotationBusy`) while another rotation holds this
+    /// modem, rather than interleaving bearer commands with it.
+    pub fn rotate_verified(&self, max_attempts: u32) -> Result<RotationOutcome> {
+        let _guard = match self.rotation_guard.try_lock() {
+            Ok(g) => g,
+            Err(TryLockError::WouldBlock) => return Err(Error::RotationBusy),
+            // A previous rotation panicked mid-flight. The modem may be in an
+            // unknown band state, so heal it rather than refusing forever.
+            Err(TryLockError::Poisoned(p)) => p.into_inner(),
+        };
+
         let budget = max_attempts.max(1);
+        // The baseline. `None` means we could not read the old address -- no
+        // session, or no bearer yet -- NOT that there was no address.
         let previous = self.read_wan_ip();
         let mut repeated: Option<String> = None;
-        let mut last_err: Option<String> = None;
+        let mut last_err: Option<Error> = None;
 
         for attempt in 1..=budget {
             match self.rotate_once() {
-                Ok(Some(ip)) => {
-                    if previous.as_deref() != Some(ip.as_str()) {
-                        return Ok(RotationOutcome::NewIp { ip, previous, attempts: attempt });
+                Ok(Some(ip)) => match previous.as_deref() {
+                    // No baseline: we have an address but cannot claim it differs
+                    // from the old one. Retrying will not produce a baseline
+                    // either, so report it plainly instead of looping.
+                    None => return Ok(RotationOutcome::UnknownBaseline { ip, attempts: attempt }),
+                    Some(prev) if prev != ip => {
+                        return Ok(RotationOutcome::NewIp {
+                            ip,
+                            previous: prev.to_string(),
+                            attempts: attempt,
+                        })
                     }
-                    self.log(&format!(
-                        "[!] attempt {}/{}: carrier re-issued the same address {}; hopping again",
-                        attempt, budget, ip
-                    ));
-                    repeated = Some(ip);
-                }
+                    Some(_) => {
+                        self.log(&format!(
+                            "[!] attempt {}/{}: carrier re-issued the same address {}; hopping again",
+                            attempt, budget, ip
+                        ));
+                        repeated = Some(ip);
+                    }
+                },
                 // Without a readable address there is nothing to compare against,
                 // so retrying would only churn the bearer blindly. Report honestly
                 // that the rotation happened but could not be verified.
@@ -563,7 +791,8 @@ impl ZTEClient {
 
         match repeated {
             Some(ip) => Ok(RotationOutcome::SameIp { ip, attempts: budget }),
-            None => Err(last_err.unwrap_or_else(|| "rotation failed".to_string())),
+            None => Err(last_err
+                .unwrap_or_else(|| Error::RotationFailed("no attempt produced a bearer".into()))),
         }
     }
 
@@ -675,7 +904,7 @@ impl ZTEClient {
                     report.authenticated = true;
                 }
                 Err(e) => {
-                    report.auth_error = Some(e.clone());
+                    report.auth_error = Some(e.to_string());
                     report.findings.push(format!("WebUI authentication failed: {}", e));
                     report.recommendations.push("Check that the configured admin password is correct.".to_string());
                 }
@@ -777,16 +1006,22 @@ impl ZTEClient {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum RotationOutcome {
-    /// Verified: the bearer returned with an address different from the old one.
+    /// Verified: the bearer returned with an address different from a *known*
+    /// previous one. `previous` is not optional -- without a baseline there is
+    /// nothing to have changed from, which is `UnknownBaseline` instead.
     NewIp {
         ip: String,
-        previous: Option<String>,
+        previous: String,
         attempts: u32,
     },
     /// The bearer returned, but the carrier re-issued the same address every hop.
     SameIp { ip: String, attempts: u32 },
-    /// The bearer returned; its address could not be read (no web session), so
-    /// whether the address changed is unknown.
+    /// The bearer returned with an address, but the address held *before* the
+    /// rotation could not be read (no session, or no bearer to begin with), so
+    /// "it changed" cannot be claimed.
+    UnknownBaseline { ip: String, attempts: u32 },
+    /// The bearer returned; its current address could not be read (no web
+    /// session), so whether the address changed is unknown.
     BearerUpIpUnknown { attempts: u32 },
 }
 
@@ -794,12 +1029,15 @@ impl RotationOutcome {
     /// The post-rotation address, when one could be read.
     pub fn ip(&self) -> Option<&str> {
         match self {
-            RotationOutcome::NewIp { ip, .. } | RotationOutcome::SameIp { ip, .. } => Some(ip),
+            RotationOutcome::NewIp { ip, .. }
+            | RotationOutcome::SameIp { ip, .. }
+            | RotationOutcome::UnknownBaseline { ip, .. } => Some(ip),
             RotationOutcome::BearerUpIpUnknown { .. } => None,
         }
     }
 
-    /// True only when the address is known to have changed.
+    /// True only when the address is known to have changed -- which requires
+    /// having read both the old and the new one.
     pub fn verified(&self) -> bool {
         matches!(self, RotationOutcome::NewIp { .. })
     }
@@ -808,12 +1046,14 @@ impl RotationOutcome {
         match self {
             RotationOutcome::NewIp { ip, previous, attempts } => format!(
                 "new WAN IP {} (was {}) after {} band-hop(s)",
-                ip,
-                previous.as_deref().unwrap_or("unknown"),
-                attempts
+                ip, previous, attempts
             ),
             RotationOutcome::SameIp { ip, attempts } => format!(
                 "bearer reset {} time(s) but the carrier kept the same WAN IP {}",
+                attempts, ip
+            ),
+            RotationOutcome::UnknownBaseline { ip, attempts } => format!(
+                "bearer reconnected after {} hop(s) with WAN IP {}, but the previous address was unreadable, so the change is unverified",
                 attempts, ip
             ),
             RotationOutcome::BearerUpIpUnknown { attempts } => format!(
@@ -869,6 +1109,26 @@ pub struct DiagnosticReport {
     pub recommendations: Vec<String>,
 }
 
+/// Poll `probe` until it yields a value or `timeout` of WALL-CLOCK time elapses.
+///
+/// The distinction matters: each probe here performs an HTTP request that can
+/// itself burn `HTTP_TIMEOUT`, so a loop that counts iterations and sleeps
+/// between them runs for far longer than its nominal budget. Every wait in this
+/// crate goes through here so that a stated timeout is the real one.
+fn poll_until<T>(timeout: Duration, mut probe: impl FnMut() -> Option<T>) -> Option<T> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(v) = probe() {
+            return Some(v);
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return None;
+        }
+        thread::sleep(POLL_INTERVAL.min(deadline - now));
+    }
+}
+
 pub fn chrono_ms() -> u128 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -905,19 +1165,19 @@ pub fn get_first_non_empty<'a>(map: &'a HashMap<String, serde_json::Value>, keys
     default_val
 }
 
-pub fn check_for_updates() -> Result<(String, String, bool), String> {
+pub fn check_for_updates() -> Result<(String, String, bool)> {
     let client = Client::builder()
         .timeout(Duration::from_secs(4))
         .user_agent("zte-control-updater")
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| Error::Transport { context: "update check", source: e })?;
 
     let resp = client
         .get("https://api.github.com/repos/miwaniza/zte-k12-rotator/releases/latest")
         .send()
-        .map_err(|e| format!("Failed to reach GitHub API: {}", e))?;
+        .map_err(|e| Error::Transport { context: "update check (GitHub API)", source: e })?;
 
-    let json: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    let json: serde_json::Value = resp.json().map_err(|e| Error::Decode { context: "update check", source: e })?;
     let latest_tag = json
         .get("tag_name")
         .and_then(|v| v.as_str())
@@ -973,6 +1233,11 @@ fn default_solid_timeout() -> u64 { 60 }
 const METRIC_ACTIVE: u32 = 10;
 const METRIC_STANDBY: u32 = 9000;
 
+/// Timeout for the source-bound "is there real internet through this modem" probe.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(4);
+/// How often the dwell loop re-checks the active modem.
+const DWELL_POLL_INTERVAL: Duration = Duration::from_secs(3);
+
 struct FleetModem {
     cfg: ModemConfig,
     client: ZTEClient,
@@ -981,15 +1246,25 @@ struct FleetModem {
 
 impl FleetModem {
     fn new(cfg: ModemConfig, log: Logger) -> Self {
-        let client = ZTEClient::new(&cfg.host, &cfg.password, Some(&cfg.bind_ip));
-        client.set_logger(log);
-        let probe_client = cfg.bind_ip.parse::<IpAddr>().ok().and_then(|ip| {
-            Client::builder()
+        let client =
+            ZTEClient::new(&cfg.host, &cfg.password, Some(&cfg.bind_ip)).with_logger(Arc::clone(&log));
+        let probe_client = match cfg.bind_ip.parse::<IpAddr>() {
+            Ok(ip) => Client::builder()
                 .local_address(ip)
-                .timeout(Duration::from_secs(4))
+                .timeout(PROBE_TIMEOUT)
                 .build()
-                .ok()
-        });
+                .ok(),
+            Err(_) => None,
+        };
+        // Say so at construction. Previously this failure was silent and
+        // `is_solid` fell back to a helper that re-parsed the same bad address
+        // and could only ever return false.
+        if probe_client.is_none() {
+            log(&format!(
+                "[fleet] {}: bind_ip '{}' is not usable; probes through this modem cannot run",
+                cfg.name, cfg.bind_ip
+            ));
+        }
         Self {
             cfg,
             client,
@@ -1017,55 +1292,37 @@ impl FleetModem {
                 Ok(r) => r.status().is_success() || r.status().is_redirection(),
                 Err(_) => false,
             },
-            (Some(url), None) => probe_through(&self.cfg.bind_ip, url),
+            // A probe was requested but cannot be issued through this modem, so
+            // "reachable" is unproven -- never promote it on that basis.
+            (Some(_), None) => false,
             (None, _) => true,
         }
     }
 }
 
-/// Fallback helper to issue an HTTP GET bound to `bind_ip`.
-fn probe_through(bind_ip: &str, url: &str) -> bool {
-    let ip: IpAddr = match bind_ip.parse() {
-        Ok(i) => i,
-        Err(_) => return false,
-    };
-    let client = match reqwest::blocking::Client::builder()
-        .local_address(ip)
-        .timeout(Duration::from_secs(4))
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-    match client.get(url).send() {
-        Ok(r) => r.status().is_success() || r.status().is_redirection(),
-        Err(_) => false,
-    }
-}
-
-fn run_cmd(prog: &str, args: &[&str]) -> Result<(), String> {
+fn run_cmd(prog: &str, args: &[&str]) -> Result<()> {
     let out = std::process::Command::new(prog)
         .args(args)
         .output()
-        .map_err(|e| format!("`{}` failed to start: {}", prog, e))?;
+        .map_err(|e| Error::Config(format!("`{}` failed to start: {}", prog, e)))?;
     if out.status.success() {
         Ok(())
     } else {
-        Err(format!(
+        Err(Error::Config(format!(
             "`{}` exited {}: {}",
             prog,
             out.status,
             String::from_utf8_lossy(&out.stderr).trim()
-        ))
+        )))
     }
 }
 
 /// Set one modem's default-route preference (lower metric = preferred).
-fn set_metric(m: &ModemConfig, metric: u32) -> Result<(), String> {
+fn set_metric(m: &ModemConfig, metric: u32) -> Result<()> {
     if cfg!(target_os = "windows") {
         let idx = m
             .iface_index
-            .ok_or_else(|| format!("modem '{}' needs iface_index on Windows", m.name))?;
+            .ok_or_else(|| Error::Config(format!("modem '{}' needs iface_index on Windows", m.name)))?;
         let arg = format!(
             "Set-NetIPInterface -InterfaceIndex {} -InterfaceMetric {}",
             idx, metric
@@ -1075,11 +1332,11 @@ fn set_metric(m: &ModemConfig, metric: u32) -> Result<(), String> {
         let dev = m
             .iface_name
             .clone()
-            .ok_or_else(|| format!("modem '{}' needs iface_name on Linux", m.name))?;
+            .ok_or_else(|| Error::Config(format!("modem '{}' needs iface_name on Linux", m.name)))?;
         let gw = m
             .gateway
             .clone()
-            .ok_or_else(|| format!("modem '{}' needs gateway on Linux", m.name))?;
+            .ok_or_else(|| Error::Config(format!("modem '{}' needs gateway on Linux", m.name)))?;
         run_cmd(
             "ip",
             &[
@@ -1094,7 +1351,7 @@ fn set_metric(m: &ModemConfig, metric: u32) -> Result<(), String> {
             let gw = m
                 .gateway
                 .clone()
-                .ok_or_else(|| format!("modem '{}' needs gateway on macOS", m.name))?;
+                .ok_or_else(|| Error::Config(format!("modem '{}' needs gateway on macOS", m.name)))?;
             run_cmd("route", &["-n", "change", "default", &gw])
         } else {
             Ok(())
@@ -1103,7 +1360,7 @@ fn set_metric(m: &ModemConfig, metric: u32) -> Result<(), String> {
 }
 
 /// Make `active` the preferred uplink and demote all the others.
-fn apply_active(modems: &[FleetModem], active: usize) -> Result<(), String> {
+fn apply_active(modems: &[FleetModem], active: usize) -> Result<()> {
     set_metric(&modems[active].cfg, METRIC_ACTIVE)?;
     for (i, m) in modems.iter().enumerate() {
         if i != active {
@@ -1114,15 +1371,10 @@ fn apply_active(modems: &[FleetModem], active: usize) -> Result<(), String> {
 }
 
 fn wait_until_solid(m: &FleetModem, probe: Option<&str>, timeout_secs: u64) -> bool {
-    let mut waited = 0u64;
-    while waited < timeout_secs {
-        if m.is_solid(probe) {
-            return true;
-        }
-        thread::sleep(Duration::from_secs(2));
-        waited += 2;
-    }
-    false
+    poll_until(Duration::from_secs(timeout_secs), || {
+        m.is_solid(probe).then_some(())
+    })
+    .is_some()
 }
 
 fn first_solid_other(modems: &[FleetModem], not: usize, probe: Option<&str>) -> Option<usize> {
@@ -1141,9 +1393,9 @@ pub fn stdout_logger() -> Logger {
 /// Run the make-before-break ping-pong. `log` receives every progress line --
 /// GUI callers pass a sink that forwards into their own log view, since a
 /// windowed build has no console for `println!` to reach.
-pub fn fleet_rotate(cfg: FleetConfig, once: bool, log: Logger) -> Result<(), String> {
+pub fn fleet_rotate(cfg: FleetConfig, once: bool, log: Logger) -> Result<()> {
     if cfg.modems.len() < 2 {
-        return Err("fleet-rotate needs at least 2 modems in the config".to_string());
+        return Err(Error::Config("fleet-rotate needs at least 2 modems in the config".to_string()));
     }
     let probe = cfg.probe_url.as_deref();
     let modems: Vec<FleetModem> = cfg
@@ -1155,7 +1407,7 @@ pub fn fleet_rotate(cfg: FleetConfig, once: bool, log: Logger) -> Result<(), Str
     // Pick an initial ACTIVE that is already solid.
     let mut active = (0..modems.len())
         .find(|&i| modems[i].is_solid(probe))
-        .ok_or("no modem has a solid connection to start from")?;
+        .ok_or_else(|| Error::Config("no modem has a solid connection to start from".to_string()))?;
     apply_active(&modems, active)?;
     log(&format!("[fleet] ACTIVE = {}", modems[active].cfg.name));
 
@@ -1194,11 +1446,16 @@ pub fn fleet_rotate(cfg: FleetConfig, once: bool, log: Logger) -> Result<(), Str
         // Dwell, watching the active modem; bail early if it drops. `dropped`
         // carries the verdict out of the loop so the emergency check below does
         // not re-probe the modem it just probed.
-        let mut waited = 0u64;
+        //
+        // Wall-clock, not iteration count: `is_solid` performs a modem read plus
+        // a probe request, so counting `waited += 3` per pass could stretch a
+        // 90-second dwell to several minutes and silently change the fleet's
+        // rotation cadence.
+        let dwell_deadline = Instant::now() + Duration::from_secs(cfg.dwell_seconds);
         let mut dropped = false;
-        while waited < cfg.dwell_seconds {
-            thread::sleep(Duration::from_secs(3));
-            waited += 3;
+        while Instant::now() < dwell_deadline {
+            let now = Instant::now();
+            thread::sleep(DWELL_POLL_INTERVAL.min(dwell_deadline - now));
             if !modems[active].is_solid(probe) {
                 dropped = true;
                 break;
@@ -1223,7 +1480,7 @@ pub fn fleet_rotate(cfg: FleetConfig, once: bool, log: Logger) -> Result<(), Str
 }
 
 impl FleetModem {
-    fn rotate(&self) -> Result<RotationOutcome, String> {
+    fn rotate(&self) -> Result<RotationOutcome> {
         self.client.rotate_and_reconnect()
     }
 }
@@ -1337,7 +1594,7 @@ mod tests {
         let sink = Arc::new(Mutex::new(Vec::<String>::new()));
         let client = ZTEClient::new("http://192.168.8.1", "", None);
         let captured = Arc::clone(&sink);
-        client.set_logger(Arc::new(move |m: &str| {
+        let client = client.with_logger(Arc::new(move |m: &str| {
             captured.lock().unwrap().push(m.to_string());
         }));
         client.log("hello");
@@ -1348,7 +1605,7 @@ mod tests {
     fn test_rotation_outcome_reporting() {
         let new_ip = RotationOutcome::NewIp {
             ip: "10.1.2.3".to_string(),
-            previous: Some("10.9.9.9".to_string()),
+            previous: "10.9.9.9".to_string(),
             attempts: 2,
         };
         assert!(new_ip.verified());
@@ -1364,6 +1621,113 @@ mod tests {
         let unknown = RotationOutcome::BearerUpIpUnknown { attempts: 1 };
         assert!(!unknown.verified());
         assert_eq!(unknown.ip(), None);
+    }
+
+    #[test]
+    fn test_unknown_baseline_is_not_reported_as_verified() {
+        // The case that used to be reported as a verified change: with no
+        // readable pre-rotation address, `None != Some(ip)` was trivially true.
+        let outcome = RotationOutcome::UnknownBaseline {
+            ip: "10.1.2.3".to_string(),
+            attempts: 1,
+        };
+        assert!(!outcome.verified());
+        assert_eq!(outcome.ip(), Some("10.1.2.3"));
+        assert!(outcome.summary().contains("unverified"));
+    }
+
+    #[test]
+    fn test_rotation_refuses_to_run_concurrently() {
+        // Nothing stopped the tray button, a scheduled script and the dashboard
+        // from interleaving DISCONNECT/CONNECT against one modem.
+        let client = ZTEClient::new("http://127.0.0.1:1", "pw", None);
+        let held = client.rotation_guard.clone();
+        let _guard = held.lock().unwrap();
+
+        match client.rotate_verified(1) {
+            Err(Error::RotationBusy) => {}
+            other => panic!("expected RotationBusy, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_check_set_result_rejects_failure_bodies() {
+        // The goform endpoint answers HTTP 200 with a failure in the body.
+        let mut body = HashMap::new();
+        body.insert("result".to_string(), serde_json::json!("failure"));
+        match ZTEClient::check_set_result("BAND_SELECT", &body) {
+            Err(Error::CommandRejected { goform_id, result }) => {
+                assert_eq!(goform_id, "BAND_SELECT");
+                assert_eq!(result, "failure");
+            }
+            other => panic!("expected CommandRejected, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_check_set_result_accepts_success_and_unknown_shapes() {
+        let mut ok = HashMap::new();
+        ok.insert("result".to_string(), serde_json::json!("success"));
+        assert!(ZTEClient::check_set_result("BAND_SELECT", &ok).is_ok());
+
+        // Some commands answer with an unrelated shape; inventing an error for
+        // those would be worse than letting them through.
+        let mut other = HashMap::new();
+        other.insert("lte_band_lock".to_string(), serde_json::json!("0x4"));
+        assert!(ZTEClient::check_set_result("BAND_SELECT", &other).is_ok());
+    }
+
+    #[test]
+    fn test_poll_until_honours_wall_clock_not_iterations() {
+        // A probe slower than the poll interval must not extend the budget: this
+        // is exactly how a "20 second" bearer wait used to run for minutes.
+        let budget = Duration::from_millis(300);
+        let started = Instant::now();
+        let mut probes = 0;
+        let result = poll_until(budget, || {
+            probes += 1;
+            thread::sleep(Duration::from_millis(120));
+            None::<()>
+        });
+        let elapsed = started.elapsed();
+
+        assert!(result.is_none());
+        assert!(probes >= 2, "should have probed more than once, got {}", probes);
+        assert!(
+            elapsed < budget + Duration::from_millis(400),
+            "overran the budget: {:?}",
+            elapsed
+        );
+    }
+
+    #[test]
+    fn test_poll_until_returns_first_value() {
+        let mut calls = 0;
+        let got = poll_until(Duration::from_secs(5), || {
+            calls += 1;
+            (calls == 2).then_some(calls)
+        });
+        assert_eq!(got, Some(2));
+    }
+
+    #[test]
+    fn test_rotation_cycle_has_no_all_bands_step() {
+        // "All bands" is the recovery state, not a hop: a retry landing on it
+        // would not constrain the radio at all.
+        assert!(!ROTATION_MASKS.iter().any(|(_, mask)| *mask == LTE_BAND_ALL));
+        assert!(ROTATION_MASKS.len() >= DEFAULT_ROTATE_ATTEMPTS as usize);
+    }
+
+    #[test]
+    fn test_error_display_and_source() {
+        use std::error::Error as _;
+        let e = Error::CommandRejected {
+            goform_id: "BAND_SELECT".to_string(),
+            result: "failure".to_string(),
+        };
+        assert_eq!(e.to_string(), "modem rejected BAND_SELECT: result=failure");
+        assert!(e.source().is_none());
+        assert_eq!(Error::RotationBusy.to_string(), "a rotation is already in progress on this modem");
     }
 
     #[test]

@@ -45,7 +45,16 @@ auth-gated fields (WAN IP, active band, cell identifiers) will be blank.
 ## 🚀 Key Features
 
 * **✈️ Band-hop bearer reset**: `DISCONNECT_NETWORK` / `CONNECT_NETWORK` around an LTE band change, to get a fresh carrier-assigned address. One hop takes roughly 15-45s: the modem has to re-register on the new band before it can dial.
-* **🛡️ Verified rotation**: the WAN IP is read *before* the rotation and compared afterwards. If the carrier re-issues the same address, the next band in the cycle (Band 8 ⇄ 3 ⇄ 7 ⇄ 20 ⇄ All) is tried, up to 3 hops. The result says which of three things happened — address changed, address unchanged, or address unreadable — instead of reporting every completed bearer reset as a success.
+* **🛡️ Verified rotation**: the WAN IP is read *before* the rotation and compared afterwards. If the carrier re-issues the same address, the next band in the cycle (Band 8 ⇄ 3 ⇄ 7 ⇄ 20) is tried, up to 3 hops. The result distinguishes four states rather than calling every completed bearer reset a success:
+
+  | outcome | `verified` | meaning |
+  |---|---|---|
+  | `new_ip` | ✅ | old and new address both read, and they differ |
+  | `same_ip` | ❌ | carrier re-issued the same address on every hop |
+  | `unknown_baseline` | ❌ | got an address, but the *previous* one was unreadable |
+  | `bearer_up_ip_unknown` | ❌ | bearer is up, current address unreadable |
+
+  Only `new_ip` is a verified change. One rotation runs at a time per modem: a second concurrent request is refused with `busy: true` rather than interleaving bearer commands.
 * **🩺 Self-healing**: 2G/3G stay enabled behind every LTE band selection, and a hop that finds no coverage restores all bands and re-dials, so a rotation cannot strand the modem in `NO_SERVICE`.
 * **🗼 Tower catalog**: records the serving cell as the modem camps on it, and can sweep Band 3 / 7 / 8 / 20 in turn to discover one per band. Only cells the modem actually reported are listed.
 * **🖥️ Two front-ends**: a local web dashboard (`zte-control ui`) and a native desktop app (`zte-egui`, no webview).

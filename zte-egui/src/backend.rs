@@ -91,7 +91,7 @@ pub fn spawn(cmd_rx: Receiver<Command>, ev_tx: Sender<Event>, repaint: impl Fn()
                             let _ = ev_tx.send(Event::RotationDone(outcome));
                         }
                         Err(e) => {
-                            let _ = ev_tx.send(Event::Error(e));
+                            let _ = ev_tx.send(Event::Error(e.to_string()));
                         }
                     }
                     if let Ok(s) = fetch_status(&client, password_good) {
@@ -104,7 +104,7 @@ pub fn spawn(cmd_rx: Receiver<Command>, ev_tx: Sender<Event>, repaint: impl Fn()
                     match client.lock_bands(&bands) {
                         Ok(r) => log(&ev_tx, format!("Lock {:?}: {}", bands, r)),
                         Err(e) => {
-                            let _ = ev_tx.send(Event::Error(e));
+                            let _ = ev_tx.send(Event::Error(e.to_string()));
                         }
                     }
                     if let Ok(s) = fetch_status(&client, password_good) {
@@ -117,7 +117,7 @@ pub fn spawn(cmd_rx: Receiver<Command>, ev_tx: Sender<Event>, repaint: impl Fn()
                     match client.unlock_bands() {
                         Ok(r) => log(&ev_tx, format!("All bands re-enabled: {}", r)),
                         Err(e) => {
-                            let _ = ev_tx.send(Event::Error(e));
+                            let _ = ev_tx.send(Event::Error(e.to_string()));
                         }
                     }
                     if let Ok(s) = fetch_status(&client, password_good) {
@@ -169,7 +169,7 @@ pub fn spawn(cmd_rx: Receiver<Command>, ev_tx: Sender<Event>, repaint: impl Fn()
                             match fleet_rotate(cfg, true, fleet_log) {
                                 Ok(()) => log(&ev_tx, "Fleet cycle complete.".into()),
                                 Err(e) => {
-                                    let _ = ev_tx.send(Event::Error(e));
+                                    let _ = ev_tx.send(Event::Error(e.to_string()));
                                 }
                             }
                         }
@@ -185,7 +185,7 @@ pub fn spawn(cmd_rx: Receiver<Command>, ev_tx: Sender<Event>, repaint: impl Fn()
     });
 }
 
-fn fetch_status(client: &ZTEClient, password_good: bool) -> Result<StatusSnapshot, String> {
+fn fetch_status(client: &ZTEClient, password_good: bool) -> zte_control::Result<StatusSnapshot> {
     // wan_ipaddr / wan_active_band / cell fields are auth-gated. Only refresh the
     // session when the password is known-good (`ensure_logged_in` no-ops while the
     // session is still valid, and re-logins succeed since the password is correct),
@@ -193,10 +193,9 @@ fn fetch_status(client: &ZTEClient, password_good: bool) -> Result<StatusSnapsho
     if password_good {
         let _ = client.ensure_logged_in();
     }
-    let keys = "wa_inner_version,hardware_version,imei,network_provider,network_type,\
-                network_lte_rsrp,lte_rsrp,lte_band_lock,wan_active_band,wan_ipaddr,ppp_status,\
-                cell_id,network_cell_id,lte_pci,lte_earfcn,wan_active_channel";
-    let m = client.get_cmd(keys, true)?;
+    // Shared with the core rather than a private copy: this list and the one in
+    // `zte_control::get_status` had already drifted apart.
+    let m = client.get_cmd(zte_control::STATUS_KEYS, true)?;
     let g = |ks: &[&str]| get_first_non_empty(&m, ks, "").to_string();
     Ok(StatusSnapshot {
         firmware: g(&["wa_inner_version"]),

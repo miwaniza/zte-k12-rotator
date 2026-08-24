@@ -355,7 +355,7 @@ mod tests {
         // RotationDone should record rotate event and update last_ip
         model.apply(Event::RotationDone(RotationOutcome::NewIp {
             ip: "10.0.0.2".to_string(),
-            previous: Some("10.0.0.1".to_string()),
+            previous: "10.0.0.1".to_string(),
             attempts: 1,
         }));
         assert_eq!(model.history.len(), 2);
