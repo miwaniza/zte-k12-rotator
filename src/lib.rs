@@ -654,6 +654,44 @@ impl ZTEClient {
         Ok(serde_json::to_string(&res).unwrap_or_default())
     }
 
+    /// Dial the data bearer, without touching bands or cell locks.
+    ///
+    /// Distinct from `rotate_and_reconnect`, which band-hops on the way: a modem
+    /// in `manual_dial` that simply has not been told to connect needs a dial,
+    /// not a rotation.
+    pub fn connect(&self) -> Result<()> {
+        let mut params = HashMap::new();
+        params.insert("notCallback".to_string(), "true".to_string());
+        self.post_cmd("CONNECT_NETWORK", params, true).map(|_| ())
+    }
+
+    /// Drop the data bearer.
+    pub fn disconnect(&self) -> Result<()> {
+        let mut params = HashMap::new();
+        params.insert("notCallback".to_string(), "true".to_string());
+        self.post_cmd("DISCONNECT_NETWORK", params, true).map(|_| ())
+    }
+
+    /// Wait for the bearer, reporting the address if it can be read. Exposed so
+    /// `connect` callers can confirm the dial actually took.
+    pub fn await_bearer(&self, timeout: Duration) -> Option<Option<String>> {
+        self.wait_bearer(timeout)
+    }
+
+    /// Set whether the modem dials on its own (`auto`) or waits to be told
+    /// (`manual`). A modem left in manual never establishes a bearer after a
+    /// power cycle, however healthy the radio is.
+    ///
+    /// The goform name for this is not in `docs/goform_api_reference.md` and
+    /// varies across ZTE firmware. A rejection is reported rather than silently
+    /// ignored (see `check_set_result`), so trying it is safe.
+    pub fn set_dial_mode(&self, auto: bool) -> Result<()> {
+        let mode = if auto { "auto_dial" } else { "manual_dial" };
+        let mut params = HashMap::new();
+        params.insert("ConnectionMode".to_string(), mode.to_string());
+        self.post_cmd("SET_CONNECTION_MODE", params, true).map(|_| ())
+    }
+
     /// Point the modem at ONE LTE band, for tower discovery. Goes through
     /// `select_bands`, so 2G/3G stay enabled and an interrupted scan can never
     /// leave the modem with no RAT to camp on.
@@ -834,6 +872,8 @@ impl ZTEClient {
             wan_ip: String::new(),
             dial_mode: String::new(),
             apn: String::new(),
+            apn_profile: String::new(),
+            apn_mode: String::new(),
             findings: Vec::new(),
             recommendations: Vec::new(),
         };
@@ -928,8 +968,9 @@ impl ZTEClient {
         let post_keys = "wan_ipaddr,ipv6_wan_ipaddr,wan_active_band,wan_active_channel,lte_earfcn,\
                          lte_pci,cell_id,network_cell_id,network_lte_rsrp,lte_rsrp,lte_rsrq,lte_snr,\
                          network_sinr,lte_rssi,rscp,ecio,lte_band_lock,lte_earfcn_lock,lte_pci_lock,\
-                         dial_mode,m_dial_mode,auto_dial,\
-                         apn_name,m_apn_name,profile_name,pdp_type,iccid,sim_imsi";
+                         dial_mode,m_dial_mode,auto_dial,apn_mode,\
+                         wan_apn,ipv4_apn,apn_name,m_apn_name,m_profile_name,profile_name,\
+                         pdp_type,iccid,sim_imsi";
 
         if let Ok(post_map) = self.get_cmd(post_keys, true) {
             report.wan_ip = g(&post_map, &["wan_ipaddr", "ipv6_wan_ipaddr"]);
@@ -961,7 +1002,13 @@ impl ZTEClient {
             }
 
             report.dial_mode = g(&post_map, &["dial_mode", "m_dial_mode", "auto_dial"]);
-            report.apn = g(&post_map, &["apn_name", "m_apn_name", "profile_name"]);
+            // `wan_apn` first: on MF920U-class firmware the APN lives there and
+            // `apn_name`/`m_apn_name`/`profile_name` are all empty, so checking
+            // only those reported "no APN configured" for a modem that had the
+            // correct carrier APN set.
+            report.apn = g(&post_map, &["wan_apn", "ipv4_apn", "apn_name", "m_apn_name"]);
+            report.apn_profile = g(&post_map, &["m_profile_name", "profile_name"]);
+            report.apn_mode = g(&post_map, &["apn_mode"]);
             report.iccid = g(&post_map, &["iccid"]);
             report.imsi = g(&post_map, &["sim_imsi"]);
         }
@@ -1167,6 +1214,10 @@ pub struct DiagnosticReport {
     pub wan_ip: String,
     pub dial_mode: String,
     pub apn: String,
+    /// Human name of the active APN profile (`m_profile_name` on MF920U-class).
+    pub apn_profile: String,
+    /// Whether the modem picks the APN itself (`auto`) or uses a manual profile.
+    pub apn_mode: String,
 
     pub findings: Vec<String>,
     pub recommendations: Vec<String>,

@@ -87,6 +87,18 @@ pub enum Commands {
     /// Band-hop + bearer reset, retrying up to 3 bands until the WAN IP is verified to have changed
     Rotate,
 
+    /// Dial the data bearer, without changing bands (unlike `rotate`)
+    Connect,
+
+    /// Drop the data bearer
+    Disconnect,
+
+    /// Set whether the modem dials on its own or waits to be told
+    SetDialMode {
+        #[arg(value_parser = ["auto", "manual"], help = "auto = dial on its own")]
+        mode: String,
+    },
+
     /// Read arbitrary WebUI fields through an authenticated session
     ///
     /// Most interesting fields (APN, dial mode, band mask, cell identifiers) are
@@ -712,6 +724,51 @@ fn main() {
             }
         }
 
+        Some(Commands::Connect) => {
+            require_password(&password);
+            match client.connect() {
+                Ok(()) => {
+                    println!("[*] Dial issued; waiting for the bearer…");
+                    match client.await_bearer(Duration::from_secs(30)) {
+                        Some(Some(ip)) => println!("[+] Bearer up. WAN IP: {}", ip),
+                        Some(None) => println!("[+] Bearer up (WAN IP not readable)."),
+                        None => {
+                            eprintln!("[-] No bearer after 30s. Check registration with `diagnose`.");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[-] Dial failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        Some(Commands::Disconnect) => {
+            require_password(&password);
+            match client.disconnect() {
+                Ok(()) => println!("[+] Bearer disconnected."),
+                Err(e) => {
+                    eprintln!("[-] {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        Some(Commands::SetDialMode { mode }) => {
+            require_password(&password);
+            let auto = mode == "auto";
+            match client.set_dial_mode(auto) {
+                Ok(()) => println!("[+] Dial mode set to {}. Verify with `zte-control get dial_mode`.", mode),
+                Err(e) => {
+                    eprintln!("[-] {}", e);
+                    eprintln!("    This firmware may use a different goform command; set it in the WebUI instead.");
+                    std::process::exit(1);
+                }
+            }
+        }
+
         Some(Commands::Get { keys, json, all }) => {
             // Best-effort: read-only fields still come back without a session.
             if !password.is_empty() {
@@ -883,7 +940,10 @@ fn print_diagnostics(rep: &DiagnosticReport, json_output: bool) {
     println!(" 🌐 DATA BEARER & IP");
     println!(" Data Bearer (PPP):{}", if rep.ppp_status == "ppp_connected" { "✅ Connected" } else { "❌ Disconnected" });
     println!(" Assigned WAN IP:  {}", if rep.wan_ip.is_empty() { "None" } else { &rep.wan_ip });
-    println!(" APN Profile:      {}", if rep.apn.is_empty() { "None / Default" } else { &rep.apn });
+    println!(" APN:              {}", if rep.apn.is_empty() { "None / Default" } else { &rep.apn });
+    if !rep.apn_profile.is_empty() || !rep.apn_mode.is_empty() {
+        println!(" APN Profile:      {} (mode: {})", if rep.apn_profile.is_empty() { "--" } else { &rep.apn_profile }, if rep.apn_mode.is_empty() { "--" } else { &rep.apn_mode });
+    }
     println!(" Dial Mode:        {}", if rep.dial_mode.is_empty() { "N/A" } else { &rep.dial_mode });
     println!("============================================================");
 
