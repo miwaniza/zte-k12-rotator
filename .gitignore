@@ -8,3 +8,8 @@ scratch/
 # install.ps1 downloaded the blob straight off `main`; releases are published by
 # CI as GitHub Release assets instead.
 /dist
+
+# Diagnostic dumps: these carry IMEI, ICCID and IMSI.
+sim-report.*
+sim-raw.*
+*-diagnostics.json

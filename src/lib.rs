@@ -825,6 +825,7 @@ impl ZTEClient {
             pci: String::new(),
             cell_id: String::new(),
             band_lock: String::new(),
+            cell_lock: None,
             rsrp: String::new(),
             rssi: String::new(),
             rsrq: String::new(),
@@ -882,12 +883,23 @@ impl ZTEClient {
         report.pin_status = g(&pre_map, &["pin_status"]);
         report.puk_status = g(&pre_map, &["puk_status"]);
 
-        let sim_lower = sim_st.to_lowercase();
-        report.sim_detected = !sim_st.is_empty()
-            && !sim_lower.contains("no_sim")
-            && !sim_lower.contains("error")
-            && !sim_lower.contains("none")
-            && sim_st != "0";
+        // What the status field claims, when the firmware reports one at all.
+        // `None` = the field is absent, which is NOT the same as "no SIM": the
+        // MF920U returns neither `sim_card_status` nor `sim_state`, and treating
+        // that silence as absence made the report tell people to clean the
+        // contacts of a SIM that was demonstrably working. The verdict is
+        // finished below, once the corroborating evidence has been read.
+        let sim_status_verdict: Option<bool> = if sim_st.is_empty() {
+            None
+        } else {
+            let sim_lower = sim_st.to_lowercase();
+            Some(
+                !sim_lower.contains("no_sim")
+                    && !sim_lower.contains("error")
+                    && !sim_lower.contains("none")
+                    && sim_st != "0",
+            )
+        };
 
         report.network_type = g(&pre_map, &["network_type"]);
         report.provider = g(&pre_map, &["network_provider", "strFullName", "strShortName"]);
@@ -915,7 +927,8 @@ impl ZTEClient {
 
         let post_keys = "wan_ipaddr,ipv6_wan_ipaddr,wan_active_band,wan_active_channel,lte_earfcn,\
                          lte_pci,cell_id,network_cell_id,network_lte_rsrp,lte_rsrp,lte_rsrq,lte_snr,\
-                         network_sinr,lte_rssi,rscp,ecio,lte_band_lock,dial_mode,m_dial_mode,auto_dial,\
+                         network_sinr,lte_rssi,rscp,ecio,lte_band_lock,lte_earfcn_lock,lte_pci_lock,\
+                         dial_mode,m_dial_mode,auto_dial,\
                          apn_name,m_apn_name,profile_name,pdp_type,iccid,sim_imsi";
 
         if let Ok(post_map) = self.get_cmd(post_keys, true) {
@@ -936,6 +949,17 @@ impl ZTEClient {
                 "Auto".to_string()
             };
 
+            // A cell lock pins the radio to ONE tower by EARFCN+PCI and survives
+            // power cycles, so a modem carried to another location can search for
+            // a tower that does not exist there and never register. It was
+            // invisible here: only the band mask was reported.
+            let earfcn_lock = g(&post_map, &["lte_earfcn_lock"]);
+            let pci_lock = g(&post_map, &["lte_pci_lock"]);
+            let locked = |s: &str| !s.trim().is_empty() && s.trim() != "0";
+            if locked(&earfcn_lock) || locked(&pci_lock) {
+                report.cell_lock = Some(format!("EARFCN {} / PCI {}", earfcn_lock, pci_lock));
+            }
+
             report.dial_mode = g(&post_map, &["dial_mode", "m_dial_mode", "auto_dial"]);
             report.apn = g(&post_map, &["apn_name", "m_apn_name", "profile_name"]);
             report.iccid = g(&post_map, &["iccid"]);
@@ -945,9 +969,32 @@ impl ZTEClient {
         let nt = report.network_type.to_uppercase();
         report.registered = !nt.is_empty() && nt != "NO_SERVICE" && !nt.starts_with("LIMITED_SERVICE") && nt != "NONE";
 
+        // Finish the SIM verdict. An ICCID or IMSI can only be read off a SIM,
+        // and a modem cannot register on a carrier without one -- either is proof
+        // the card is present and readable, whatever the status field says or
+        // fails to say.
+        let sim_evidence = !report.iccid.is_empty() || !report.imsi.is_empty() || report.registered;
+        report.sim_detected = sim_evidence || sim_status_verdict.unwrap_or(false);
+
         if !report.sim_detected {
-            report.findings.push("SIM card is NOT detected by the modem slot (NO_SIM / SIM_ERROR).".to_string());
-            report.recommendations.push("Power off modem, remove SIM card, clean contacts, re-insert firmly, and power on.".to_string());
+            // Distinguish "the modem says there is no SIM" from "the modem says
+            // nothing and nothing else suggests one", which need different advice.
+            if sim_status_verdict == Some(false) {
+                report.findings.push(format!(
+                    "Modem reports no usable SIM in the slot (sim status: {}).",
+                    if sim_st.is_empty() { "unknown" } else { &sim_st }
+                ));
+                report.recommendations.push("Power off modem, remove SIM card, clean contacts, re-insert firmly, and power on.".to_string());
+            } else {
+                report.findings.push(
+                    "No SIM could be confirmed: the modem reports no SIM status, and no ICCID, IMSI or network registration was readable."
+                        .to_string(),
+                );
+                report.recommendations.push(
+                    "Check the SIM is seated. If the modem is registered on a carrier, log in (--password / ZTE_PASSWORD) -- ICCID and IMSI are auth-gated."
+                        .to_string(),
+                );
+            }
         } else {
             let pin_up = report.pin_status.to_uppercase();
             if pin_up.contains("CHECK_PIN") || pin_up.contains("PIN_REQUIRED") || pin_up == "1" {
@@ -959,6 +1006,19 @@ impl ZTEClient {
                 report.findings.push("SIM card is PUK locked.".to_string());
                 report.recommendations.push("Enter the carrier PUK code via the WebUI to unlock the SIM.".to_string());
             }
+        }
+
+        // Worth reporting whether or not the modem is currently registered: a cell
+        // lock that happens to work here will strand the modem the moment it moves.
+        if let Some(ref lock) = report.cell_lock {
+            report.findings.push(format!(
+                "Radio is locked to a single cell ({}). This survives power cycles, so the modem will fail to register anywhere that tower is not in range.",
+                lock
+            ));
+            report.recommendations.push(
+                "Run `zte-control unlock-bands` to clear the cell lock and re-enable all bands."
+                    .to_string(),
+            );
         }
 
         if report.sim_detected && !report.registered {
@@ -1095,6 +1155,9 @@ pub struct DiagnosticReport {
     pub pci: String,
     pub cell_id: String,
     pub band_lock: String,
+    /// `Some` when the radio is pinned to one tower (EARFCN + PCI). This lock
+    /// persists across power cycles and can strand the modem if it is moved.
+    pub cell_lock: Option<String>,
     pub rsrp: String,
     pub rssi: String,
     pub rsrq: String,
@@ -1716,6 +1779,57 @@ mod tests {
         // would not constrain the radio at all.
         assert!(!ROTATION_MASKS.iter().any(|(_, mask)| *mask == LTE_BAND_ALL));
         assert!(ROTATION_MASKS.len() >= DEFAULT_ROTATE_ATTEMPTS as usize);
+    }
+
+    /// Build a report the way `run_diagnostics` finishes it, so the SIM verdict
+    /// can be exercised without a modem.
+    fn sim_verdict(status_field: &str, iccid: &str, imsi: &str, registered: bool) -> bool {
+        let verdict: Option<bool> = if status_field.is_empty() {
+            None
+        } else {
+            let l = status_field.to_lowercase();
+            Some(
+                !l.contains("no_sim")
+                    && !l.contains("error")
+                    && !l.contains("none")
+                    && status_field != "0",
+            )
+        };
+        let evidence = !iccid.is_empty() || !imsi.is_empty() || registered;
+        evidence || verdict.unwrap_or(false)
+    }
+
+    #[test]
+    fn test_sim_present_when_firmware_reports_no_status_field() {
+        // The MF920U case: neither `sim_card_status` nor `sim_state` is returned,
+        // yet the SIM is plainly working. Treating the silence as absence told
+        // people to clean the contacts of a SIM that had just been read.
+        assert!(sim_verdict("", "8938003993073494383", "255030062405076", true));
+        // Registration alone is enough -- ICCID/IMSI are auth-gated.
+        assert!(sim_verdict("", "", "", true));
+        // ICCID alone is enough, even with no registration.
+        assert!(sim_verdict("", "8938003993073494383", "", false));
+    }
+
+    #[test]
+    fn test_sim_absent_only_when_nothing_corroborates_it() {
+        assert!(!sim_verdict("", "", "", false));
+        assert!(!sim_verdict("NO_SIM", "", "", false));
+        assert!(!sim_verdict("SIM_ERROR", "", "", false));
+        assert!(!sim_verdict("0", "", "", false));
+    }
+
+    #[test]
+    fn test_sim_evidence_outweighs_a_stale_status_field() {
+        // A modem that says NO_SIM while handing back an IMSI and sitting on a
+        // carrier network is contradicting itself; believe the evidence.
+        assert!(sim_verdict("NO_SIM", "", "255030062405076", true));
+    }
+
+    #[test]
+    fn test_sim_status_field_alone_can_confirm() {
+        assert!(sim_verdict("READY", "", "", false));
+        assert!(sim_verdict("modem_sim_ready", "", "", false));
     }
 
     #[test]

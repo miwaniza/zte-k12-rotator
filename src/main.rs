@@ -798,7 +798,7 @@ fn print_diagnostics(rep: &DiagnosticReport, json_output: bool) {
     }
     println!("------------------------------------------------------------");
     println!(" 💳 SIM CARD STATUS");
-    println!(" SIM Detected:     {}", if rep.sim_detected { "✅ Yes (SIM Detected)" } else { "❌ NOT DETECTED (NO_SIM / Check Slot)" });
+    println!(" SIM Detected:     {}", if rep.sim_detected { "✅ Yes (SIM Detected)" } else { "❌ Not confirmed (see findings)" });
     println!(" SIM Raw State:    {}", if rep.sim_state.is_empty() { "Unknown" } else { &rep.sim_state });
     println!(" PIN Lock:         {}", if rep.pin_status.is_empty() { "None" } else { &rep.pin_status });
     println!(" PUK Lock:         {}", if rep.puk_status.is_empty() { "None" } else { &rep.puk_status });
@@ -816,6 +816,7 @@ fn print_diagnostics(rep: &DiagnosticReport, json_output: bool) {
     println!(" Active Band:      {} (Channel / EARFCN: {})", if rep.band.is_empty() { "N/A" } else { &rep.band }, if rep.channel.is_empty() { "--" } else { &rep.channel });
     println!(" Serving Cell:     PCI: {} | Cell ID: {}", if rep.pci.is_empty() { "--" } else { &rep.pci }, if rep.cell_id.is_empty() { "--" } else { &rep.cell_id });
     println!(" Allowed Bands:    {}", rep.band_lock);
+    println!(" Cell Lock:        {}", rep.cell_lock.as_deref().unwrap_or("None (auto cell selection)"));
     println!(" Radio Signal:     RSRP: {} dBm | RSSI: {} dBm", if rep.rsrp.is_empty() { "--" } else { &rep.rsrp }, if rep.rssi.is_empty() { "--" } else { &rep.rssi });
     println!(" Signal Quality:   SINR: {} dB | RSRQ: {} dB", if rep.sinr.is_empty() { "--" } else { &rep.sinr }, if rep.rsrq.is_empty() { "--" } else { &rep.rsrq });
     println!("------------------------------------------------------------");
