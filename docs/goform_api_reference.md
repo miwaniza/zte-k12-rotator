@@ -97,3 +97,62 @@ Content-Type: application/x-www-form-urlencoded; charset=UTF-8
 
 isTest=false&goformId=CONNECT_NETWORK
 ```
+
+---
+
+## 6. APN Profiles (`APN_PROC_EX`)
+
+Recovered from the device's own WebUI bundle (`service.js`) on
+`BD_MACTEXPKMF920UV1.0.0B01`, not guessed. Which goformId applies depends on the
+WebUI config flag `USE_IPV6_INTERFACE`: `APN_PROC_EX` when set, `APN_PROC`
+otherwise. `cmd=apn_interface_version` reports `2` on this unit.
+
+**`apn_action` is `save`, not `set`.** `set` is rejected with `result=failure`.
+
+### 6.1 Write a profile into a slot
+
+```http
+POST /goform/goform_set_cmd_process
+isTest=false&goformId=APN_PROC_EX&apn_action=save&apn_mode=manual
+&profile_name=<name>&wan_dial=*99#&apn_select=manual
+&pdp_type=IP&pdp_select=auto&pdp_addr=&index=<slot>
+&wan_apn=<apn>&ppp_auth_mode=none&ppp_username=&ppp_passwd=
+&dns_mode=auto&prefer_dns_manual=&standby_dns_manual=
+```
+
+`pdp_type=IPv6` swaps the last two lines for their `ipv6_`-prefixed equivalents
+(`ipv6_wan_apn`, `ipv6_ppp_auth_mode`, …); `IPv4v6` sends both sets.
+
+### 6.2 Select it
+
+Writing a profile does **not** activate it:
+
+```http
+isTest=false&goformId=APN_PROC_EX&apn_action=set_default&apn_mode=manual
+&set_default_flag=1&pdp_type=IP&index=<slot>
+```
+
+### 6.3 Delete
+
+```http
+isTest=false&goformId=APN_PROC_EX&apn_action=delete&apn_mode=manual&index=<slot>
+```
+
+### 6.4 Reading the active profile
+
+The APN is in **`wan_apn`**, with the profile name in `m_profile_name`.
+`apn_name`, `m_apn_name` and `profile_name` are all empty on this firmware, so
+reading only those makes a configured modem look unconfigured.
+
+`apn_mode=auto` lets the modem pick from a built-in IMSI-keyed table, which can
+hold retired carrier profiles — an MF920U with a Kyivstar SIM selected
+`www.djuice.com.ua` (a brand withdrawn years ago) and the carrier refused the PDP
+context. Pin the profile with `apn_mode=manual` to stop that.
+
+### 6.5 Dial mode
+
+```http
+isTest=false&goformId=SET_CONNECTION_MODE&ConnectionMode=auto_dial   # or manual_dial
+```
+
+Confirmed working on this firmware; read it back from `dial_mode`.

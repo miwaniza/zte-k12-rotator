@@ -758,29 +758,36 @@ impl ZTEClient {
     /// -- a sub-brand retired years ago -- and the carrier rejected the PDP
     /// context. Pinning the profile manually is the fix.
     ///
-    /// `APN_PROC_EX` is not in `docs/goform_api_reference.md` and its parameter
-    /// set varies across ZTE firmware; a rejection is reported rather than
-    /// silently ignored (`check_set_result`), so attempting it is safe.
+    /// The parameter set is taken from the device's own WebUI bundle
+    /// (`service.js`, the `APN_PROC_EX` save/set_default handlers) rather than
+    /// guessed. Note `apn_action=save` -- `set` is rejected with
+    /// `result=failure`, which is how the first attempt at this failed.
     pub fn set_apn(&self, apn: &str, profile: &str, index: u32, auth: ApnAuth) -> Result<()> {
         let idx = index.to_string();
 
-        let mut set = HashMap::new();
-        set.insert("apn_action".to_string(), "set".to_string());
-        set.insert("apn_mode".to_string(), "manual".to_string());
-        set.insert("profile_name".to_string(), profile.to_string());
-        set.insert("wan_apn".to_string(), apn.to_string());
-        set.insert("wan_dial".to_string(), "*99#".to_string());
-        set.insert("apn_select".to_string(), "manual".to_string());
-        set.insert("pdp_type".to_string(), "IP".to_string());
-        set.insert("pdp_select".to_string(), "auto".to_string());
-        set.insert("index".to_string(), idx.clone());
-        set.insert("ppp_auth_mode".to_string(), auth.mode().to_string());
-        set.insert("ppp_username".to_string(), auth.username().to_string());
-        set.insert("ppp_passwd".to_string(), auth.password().to_string());
-        self.post_cmd("APN_PROC_EX", set, true)?;
+        // Step 1: write the profile into slot `index`.
+        let mut save = HashMap::new();
+        save.insert("apn_action".to_string(), "save".to_string());
+        save.insert("apn_mode".to_string(), "manual".to_string());
+        save.insert("profile_name".to_string(), profile.to_string());
+        save.insert("wan_dial".to_string(), "*99#".to_string());
+        save.insert("apn_select".to_string(), "manual".to_string());
+        save.insert("pdp_type".to_string(), "IP".to_string());
+        save.insert("pdp_select".to_string(), "auto".to_string());
+        save.insert("pdp_addr".to_string(), String::new());
+        save.insert("index".to_string(), idx.clone());
+        // The IPv4 ("IP") branch of the WebUI's save payload.
+        save.insert("wan_apn".to_string(), apn.to_string());
+        save.insert("ppp_auth_mode".to_string(), auth.mode().to_string());
+        save.insert("ppp_username".to_string(), auth.username().to_string());
+        save.insert("ppp_passwd".to_string(), auth.password().to_string());
+        save.insert("dns_mode".to_string(), "auto".to_string());
+        save.insert("prefer_dns_manual".to_string(), String::new());
+        save.insert("standby_dns_manual".to_string(), String::new());
+        self.post_cmd("APN_PROC_EX", save, true)?;
 
-        // Writing the profile does not select it; without this the modem keeps
-        // using whatever it had.
+        // Step 2: writing the profile does not select it -- without this the
+        // modem keeps dialling whatever it had.
         let mut default = HashMap::new();
         default.insert("apn_action".to_string(), "set_default".to_string());
         default.insert("apn_mode".to_string(), "manual".to_string());
