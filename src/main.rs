@@ -1,3 +1,4 @@
+use base64::Engine as _;
 use clap::{Parser, Subcommand};
 use reqwest::blocking::Client;
 use sha2::{Digest, Sha256};
@@ -5,7 +6,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tiny_http::{Header, Method, Response, Server};
@@ -29,7 +30,7 @@ const ROTATION_MASKS: &[(&str, &str)] = &[
 #[derive(Parser, Debug)]
 #[command(name = "zte-control", author, version = VERSION, about = "Universal Controller, IP & Region Rotator for ZTE K12 (ZX297520)")]
 pub struct Cli {
-    #[arg(long, default_value = "http://192.168.0.1", help = "Router base URL")]
+    #[arg(long, default_value = "http://192.168.8.1", help = "Router base URL")]
     pub host: String,
 
     #[arg(short, long, default_value = "353FALM5", help = "WebUI admin password")]
@@ -115,13 +116,19 @@ pub struct ZTEClient {
     pub base_url: String,
     pub password: String,
     pub client: Client,
+    /// Captured session cookie (e.g. `stok=...`) replayed on every request.
+    /// The MF920U sets a malformed cookie (`HttpOnly=1`, invalid `Expires`) that
+    /// reqwest's cookie store silently drops, so we carry it manually instead.
+    session_cookie: Arc<Mutex<Option<String>>>,
 }
 
 impl ZTEClient {
     pub fn new(host: &str, password: &str, bind_ip: Option<&str>) -> Self {
         let base_url = host.trim_end_matches('/').to_string();
+        // Session is carried manually via `session_cookie` (see the field docs),
+        // so the built-in cookie store is disabled to avoid it clobbering our header.
         let mut builder = Client::builder()
-            .cookie_store(true)
+            .cookie_store(false)
             .timeout(Duration::from_secs(6));
 
         if let Some(ip_str) = bind_ip {
@@ -136,6 +143,30 @@ impl ZTEClient {
             base_url,
             password: password.to_string(),
             client,
+            session_cookie: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// The current session cookie pair (`name=value`), if logged in.
+    fn session_cookie(&self) -> Option<String> {
+        self.session_cookie.lock().ok().and_then(|g| g.clone())
+    }
+
+    /// Capture the session cookie (first `name=value` pair) from a login response's
+    /// `Set-Cookie` header(s). Firmware-agnostic: works for the MF920U's `stok` and
+    /// any other ZTE session cookie name.
+    fn capture_session_cookie(&self, resp: &reqwest::blocking::Response) {
+        for hv in resp.headers().get_all(reqwest::header::SET_COOKIE).iter() {
+            if let Ok(s) = hv.to_str() {
+                if let Some(pair) = s.split(';').next().map(|p| p.trim().to_string()) {
+                    if pair.contains('=') {
+                        if let Ok(mut g) = self.session_cookie.lock() {
+                            *g = Some(pair);
+                        }
+                        return;
+                    }
+                }
+            }
         }
     }
 
@@ -144,6 +175,32 @@ impl ZTEClient {
         hasher.update(input.as_bytes());
         let result = hasher.finalize();
         hex::encode(result).to_uppercase()
+    }
+
+    /// Lowercase hex MD5 -- the `hex_md5()` primitive the MF920U-class WebUI uses.
+    pub fn md5_hex_lower(input: &str) -> String {
+        format!("{:x}", md5::compute(input.as_bytes()))
+    }
+
+    /// Read the device firmware build string (`wa_inner_version`); this is pre-auth
+    /// on both firmware families, so it can drive the auth-scheme selection below.
+    fn firmware_version(&self) -> String {
+        self.get_cmd("wa_inner_version", false)
+            .ok()
+            .and_then(|m| {
+                m.get("wa_inner_version")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_default()
+    }
+
+    /// True for the K12/ZX297520 firmware, which authenticates with the SHA-256
+    /// login + SHA-256 AD scheme. Everything else (e.g. the MF920U UFI family,
+    /// `BD_MACTEXPKMF920U...`, whose WebUI sets `PASSWORD_ENCODE=true`) uses the
+    /// Base64 login + MD5 AD scheme.
+    fn is_k12_firmware(&self) -> bool {
+        self.firmware_version().contains("K12")
     }
 
     pub fn get_cmd(&self, cmd: &str, multi: bool) -> Result<HashMap<String, serde_json::Value>, String> {
@@ -156,13 +213,15 @@ impl ZTEClient {
             chrono_ms()
         );
 
-        let resp = self
+        let mut req = self
             .client
             .get(&url)
             .header("X-Requested-With", "XMLHttpRequest")
-            .header("Referer", format!("{}/index.html", self.base_url))
-            .send()
-            .map_err(|e| format!("HTTP GET error: {}", e))?;
+            .header("Referer", format!("{}/index.html", self.base_url));
+        if let Some(cookie) = self.session_cookie() {
+            req = req.header("Cookie", cookie);
+        }
+        let resp = req.send().map_err(|e| format!("HTTP GET error: {}", e))?;
 
         let json_map: HashMap<String, serde_json::Value> = resp
             .json()
@@ -170,36 +229,69 @@ impl ZTEClient {
         Ok(json_map)
     }
 
+    /// Anti-CSRF token required by sensitive SET commands. Both firmware families
+    /// hash the live `wa_inner_version` against a fresh per-request `RD`, but differ
+    /// in algorithm:
+    ///   * K12/ZX297520: `AD = sha256_upper( sha256_upper(wa_inner_version) + RD )`
+    ///   * MF920U-class: `AD = md5_lower( md5_lower(wa_inner_version + cr_version) + RD )`
+    /// The version is read live from the device rather than hardcoded, so a firmware
+    /// revision bump does not silently break the token.
     pub fn get_ad_token(&self) -> Result<String, String> {
-        let rd_map = self.get_cmd("RD", false)?;
-        let rd = rd_map
+        let ver = self.get_cmd("wa_inner_version,cr_version", true)?;
+        let wa = ver
+            .get("wa_inner_version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let cr = ver
+            .get("cr_version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let rd = self
+            .get_cmd("RD", false)?
             .get("RD")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
 
-        let fw_hash = Self::sha256_hex_upper("BD_SMARTDIGITALUAK12V1.0.0B01");
-        let ad = Self::sha256_hex_upper(&format!("{}{}", fw_hash, rd));
+        let ad = if wa.contains("K12") {
+            let fw_hash = Self::sha256_hex_upper(&wa);
+            Self::sha256_hex_upper(&format!("{}{}", fw_hash, rd))
+        } else {
+            let ver_hash = Self::md5_hex_lower(&format!("{}{}", wa, cr));
+            Self::md5_hex_lower(&format!("{}{}", ver_hash, rd))
+        };
         Ok(ad)
     }
 
     pub fn login(&self) -> Result<bool, String> {
-        let ld_map = self.get_cmd("LD", false)?;
-        let ld = ld_map
-            .get("LD")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        let p1 = Self::sha256_hex_upper(&self.password);
-        let password_hash = Self::sha256_hex_upper(&format!("{}{}", p1, ld));
-
         let url = format!("{}/goform/goform_set_cmd_process", self.base_url);
         let mut params = HashMap::new();
         params.insert("isTest".to_string(), "false".to_string());
         params.insert("goformId".to_string(), "LOGIN".to_string());
-        params.insert("password".to_string(), password_hash);
-        params.insert("save_login".to_string(), "1".to_string());
+
+        if self.is_k12_firmware() {
+            // K12/ZX297520: password = sha256_upper( sha256_upper(pw) + LD ),
+            // using the LD challenge, and the session opts into save_login.
+            let ld = self
+                .get_cmd("LD", false)?
+                .get("LD")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let p1 = Self::sha256_hex_upper(&self.password);
+            let password_hash = Self::sha256_hex_upper(&format!("{}{}", p1, ld));
+            params.insert("password".to_string(), password_hash);
+            params.insert("save_login".to_string(), "1".to_string());
+        } else {
+            // MF920U-class (WebUI config PASSWORD_ENCODE=true): password is just
+            // Base64 of the plaintext -- no LD challenge, no SHA hashing.
+            let password_enc =
+                base64::engine::general_purpose::STANDARD.encode(self.password.as_bytes());
+            params.insert("password".to_string(), password_enc);
+        }
 
         let resp = self
             .client
@@ -210,6 +302,9 @@ impl ZTEClient {
             .form(&params)
             .send()
             .map_err(|e| format!("Login POST error: {}", e))?;
+
+        // Capture the session cookie before the body consumes the response.
+        self.capture_session_cookie(&resp);
 
         let res_map: HashMap<String, serde_json::Value> = resp
             .json()
@@ -224,14 +319,20 @@ impl ZTEClient {
     }
 
     pub fn ensure_logged_in(&self) -> Result<(), String> {
-        let status = self.get_cmd("loginfo", false)?;
-        if let Some(s) = status.get("loginfo").and_then(|v| v.as_str()) {
-            if s == "ok" {
+        // A session is only usable if we actually hold its cookie. The modem reports
+        // loginfo="ok" for any caller from an already-logged-in client IP -- even one
+        // with no cookie -- but SET commands still require the cookie. So trust
+        // loginfo only when we already hold a session cookie; otherwise (re)login to
+        // capture one. Without this, a second CLI invocation reuses the lingering
+        // IP session, skips login, and every SET fails for lack of the cookie.
+        if self.session_cookie().is_some() {
+            let status = self.get_cmd("loginfo", false)?;
+            if status.get("loginfo").and_then(|v| v.as_str()) == Some("ok") {
                 return Ok(());
             }
         }
         if !self.login()? {
-            return Err("Failed to authenticate to ZTE K12 WebUI".to_string());
+            return Err("Failed to authenticate to ZTE WebUI".to_string());
         }
         Ok(())
     }
@@ -248,15 +349,17 @@ impl ZTEClient {
         params.insert("goformId".to_string(), goform_id.to_string());
 
         let url = format!("{}/goform/goform_set_cmd_process", self.base_url);
-        let resp = self
+        let mut req = self
             .client
             .post(&url)
             .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
             .header("X-Requested-With", "XMLHttpRequest")
             .header("Referer", format!("{}/index.html", self.base_url))
-            .form(&params)
-            .send()
-            .map_err(|e| format!("POST command error: {}", e))?;
+            .form(&params);
+        if let Some(cookie) = self.session_cookie() {
+            req = req.header("Cookie", cookie);
+        }
+        let resp = req.send().map_err(|e| format!("POST command error: {}", e))?;
 
         let res_map: HashMap<String, serde_json::Value> = resp
             .json()
@@ -499,23 +602,36 @@ pub fn run_ui_server(client: Arc<ZTEClient>, port: u16, no_open: bool) {
             let result_body = if *request.method() == Method::Post {
                 let mut body_bytes = Vec::new();
                 let _ = request.as_reader().read_to_end(&mut body_bytes);
-                client
+                let mut req = client
                     .client
                     .post(&target_url)
                     .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
                     .header("X-Requested-With", "XMLHttpRequest")
                     .header("Referer", format!("{}/index.html", client.base_url))
-                    .body(body_bytes)
-                    .send()
-                    .and_then(|r| r.text())
-                    .unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+                    .body(body_bytes);
+                if let Some(cookie) = client.session_cookie() {
+                    req = req.header("Cookie", cookie);
+                }
+                match req.send() {
+                    // Capture the session cookie from a login forwarded through the
+                    // proxy, so subsequent forwarded SETs carry it (the cookie store
+                    // is disabled; see ZTEClient::session_cookie).
+                    Ok(r) => {
+                        client.capture_session_cookie(&r);
+                        r.text().unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+                    }
+                    Err(e) => format!("{{\"error\":\"{}\"}}", e),
+                }
             } else {
-                client
+                let mut req = client
                     .client
                     .get(&target_url)
                     .header("X-Requested-With", "XMLHttpRequest")
-                    .header("Referer", format!("{}/index.html", client.base_url))
-                    .send()
+                    .header("Referer", format!("{}/index.html", client.base_url));
+                if let Some(cookie) = client.session_cookie() {
+                    req = req.header("Cookie", cookie);
+                }
+                req.send()
                     .and_then(|r| r.text())
                     .unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
             };
