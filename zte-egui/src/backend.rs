@@ -100,6 +100,13 @@ pub fn spawn(cmd_rx: Receiver<Command>, ev_tx: Sender<Event>, repaint: impl Fn()
 }
 
 fn fetch_status(client: &ZTEClient) -> Result<StatusSnapshot, String> {
+    // wan_ipaddr / wan_active_band / cell fields are auth-gated, so establish a
+    // session first (best-effort — pre-auth fields still read if login fails).
+    // Only attempt login when a password is set: empty-password login attempts
+    // every poll would burn the modem's 5-try lockout in seconds.
+    if !client.password.is_empty() {
+        let _ = client.ensure_logged_in();
+    }
     let keys = "wa_inner_version,hardware_version,imei,network_provider,network_type,\
                 network_lte_rsrp,lte_rsrp,lte_band_lock,wan_active_band,wan_ipaddr,ppp_status,\
                 cell_id,network_cell_id,lte_pci,lte_earfcn,wan_active_channel";

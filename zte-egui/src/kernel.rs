@@ -107,6 +107,13 @@ impl AppModel {
     }
 }
 
+/// Render one "Key: value" property chip for the persistent header.
+fn prop(ui: &mut egui::Ui, k: &str, v: &str) {
+    ui.label(egui::RichText::new(k).weak());
+    ui.label(egui::RichText::new(if v.is_empty() { "—" } else { v }).strong().monospace());
+    ui.separator();
+}
+
 /// Wall-clock HH:MM:SS in UTC (no external time crate needed).
 fn now_hms() -> String {
     let secs = std::time::SystemTime::now()
@@ -230,23 +237,35 @@ impl eframe::App for Kernel {
             self.last_poll = Instant::now();
         }
 
+        // Persistent header: connection status + Rotate button + live properties,
+        // visible on every tab.
         egui::TopBottomPanel::top("bar").show(ctx, |ui| {
-            ui.add_space(4.0);
+            ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.heading("ZTE Control");
                 ui.separator();
-                let s = &self.model.status;
-                if s.connected() {
-                    ui.label(format!("🟢 {} · {} · {}", s.operator, s.network_type, s.wan_ip));
-                } else {
-                    let t = if s.network_type.is_empty() { "not connected".to_string() } else { s.network_type.clone() };
-                    ui.label(format!("🔴 {}", t));
-                }
+                ui.label(if self.model.status.connected() { "🟢" } else { "🔴" });
+                ui.add_enabled_ui(!self.model.busy, |ui| {
+                    if ui.button("🔄  Rotate IP").clicked() {
+                        let _ = self.tx.send(Command::Rotate);
+                    }
+                });
                 if self.model.busy {
                     ui.spinner();
+                    ui.label("working…");
                 }
             });
             ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                let s = &self.model.status;
+                prop(ui, "Operator", &s.operator);
+                prop(ui, "Network", &s.network_type);
+                prop(ui, "Band", &s.band);
+                prop(ui, "IP", &s.wan_ip);
+                prop(ui, "RSRP", &s.rsrp);
+                prop(ui, "PPP", &s.ppp);
+            });
+            ui.add_space(6.0);
         });
 
         egui::SidePanel::left("nav").resizable(false).exact_width(140.0).show(ctx, |ui| {
