@@ -101,6 +101,15 @@ pub enum Commands {
         #[arg(long, help = "Do not automatically open browser")]
         no_open: bool,
     },
+
+    /// Make-before-break IP rotation across multiple modems (see docs/multi_modem_rotation.md)
+    FleetRotate {
+        #[arg(long, help = "Path to fleet JSON config")]
+        config: String,
+
+        #[arg(long, help = "Run a single rotate+swap cycle and exit (default: loop)")]
+        once: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -767,6 +776,266 @@ fn handle_service_command(action: ServiceAction) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Multi-modem "make-before-break" rotation (docs/multi_modem_rotation.md)
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize, Debug, Clone)]
+pub struct FleetConfig {
+    /// How long an ACTIVE modem serves before we rotate its peer.
+    #[serde(default = "default_dwell")]
+    pub dwell_seconds: u64,
+    /// How long to wait for a just-rotated modem to become solid before giving up.
+    #[serde(default = "default_solid_timeout")]
+    pub solid_timeout_seconds: u64,
+    /// Optional URL fetched source-bound through a modem to prove real internet.
+    /// Should return quickly (a 204/generate_204 endpoint is ideal).
+    #[serde(default)]
+    pub probe_url: Option<String>,
+    pub modems: Vec<ModemConfig>,
+}
+
+#[derive(serde::Deserialize, Debug, Clone)]
+pub struct ModemConfig {
+    pub name: String,
+    pub host: String,
+    pub password: String,
+    /// Host address on this modem's subnet; control + probe traffic is bound to it.
+    pub bind_ip: String,
+    /// Windows: the modem interface's InterfaceIndex (Get-NetAdapter).
+    #[serde(default)]
+    pub iface_index: Option<u32>,
+    /// Linux: the modem network interface name (e.g. "usb0").
+    #[serde(default)]
+    pub iface_name: Option<String>,
+    /// Linux/macOS: this modem's gateway IP for its default route.
+    #[serde(default)]
+    pub gateway: Option<String>,
+}
+
+fn default_dwell() -> u64 { 90 }
+fn default_solid_timeout() -> u64 { 45 }
+
+const METRIC_ACTIVE: u32 = 10;
+const METRIC_STANDBY: u32 = 9000;
+
+struct FleetModem {
+    cfg: ModemConfig,
+    client: ZTEClient,
+}
+
+impl FleetModem {
+    /// A modem is "solid" only if its bearer is up with a routable IP and, when a
+    /// probe URL is configured, an actual request succeeds *through this modem*.
+    fn is_solid(&self, probe: Option<&str>) -> bool {
+        let bearer_ok = match self.client.get_cmd("wan_ipaddr,ppp_status", false) {
+            Ok(m) => {
+                let ppp = m.get("ppp_status").and_then(|v| v.as_str()).unwrap_or("");
+                let ip = m.get("wan_ipaddr").and_then(|v| v.as_str()).unwrap_or("");
+                ppp == "ppp_connected" && !ip.is_empty()
+            }
+            Err(_) => false,
+        };
+        if !bearer_ok {
+            return false;
+        }
+        match probe {
+            Some(url) => probe_through(&self.cfg.bind_ip, url),
+            None => true,
+        }
+    }
+}
+
+/// Issue an HTTP GET bound to `bind_ip` so it egresses through that modem's
+/// interface, proving end-to-end internet rather than just a local bearer.
+fn probe_through(bind_ip: &str, url: &str) -> bool {
+    let ip: IpAddr = match bind_ip.parse() {
+        Ok(i) => i,
+        Err(_) => return false,
+    };
+    let client = match reqwest::blocking::Client::builder()
+        .local_address(ip)
+        .timeout(Duration::from_secs(4))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    match client.get(url).send() {
+        Ok(r) => r.status().is_success() || r.status().is_redirection(),
+        Err(_) => false,
+    }
+}
+
+fn run_cmd(prog: &str, args: &[&str]) -> Result<(), String> {
+    let out = std::process::Command::new(prog)
+        .args(args)
+        .output()
+        .map_err(|e| format!("`{}` failed to start: {}", prog, e))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "`{}` exited {}: {}",
+            prog,
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
+}
+
+/// Set one modem's default-route preference (lower metric = preferred).
+fn set_metric(m: &ModemConfig, metric: u32) -> Result<(), String> {
+    if cfg!(target_os = "windows") {
+        let idx = m
+            .iface_index
+            .ok_or_else(|| format!("modem '{}' needs iface_index on Windows", m.name))?;
+        let arg = format!(
+            "Set-NetIPInterface -InterfaceIndex {} -InterfaceMetric {}",
+            idx, metric
+        );
+        run_cmd("powershell", &["-NoProfile", "-Command", &arg])
+    } else if cfg!(target_os = "linux") {
+        let dev = m
+            .iface_name
+            .clone()
+            .ok_or_else(|| format!("modem '{}' needs iface_name on Linux", m.name))?;
+        let gw = m
+            .gateway
+            .clone()
+            .ok_or_else(|| format!("modem '{}' needs gateway on Linux", m.name))?;
+        run_cmd(
+            "ip",
+            &[
+                "route", "replace", "default", "via", &gw, "dev", &dev, "metric",
+                &metric.to_string(),
+            ],
+        )
+    } else {
+        // macOS has a single default route (no per-interface metric); only the
+        // active modem's gateway is installed as THE default.
+        if metric == METRIC_ACTIVE {
+            let gw = m
+                .gateway
+                .clone()
+                .ok_or_else(|| format!("modem '{}' needs gateway on macOS", m.name))?;
+            run_cmd("route", &["-n", "change", "default", &gw])
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Make `active` the preferred uplink and demote all the others.
+fn apply_active(modems: &[FleetModem], active: usize) -> Result<(), String> {
+    set_metric(&modems[active].cfg, METRIC_ACTIVE)?;
+    for (i, m) in modems.iter().enumerate() {
+        if i != active {
+            set_metric(&m.cfg, METRIC_STANDBY)?;
+        }
+    }
+    Ok(())
+}
+
+fn wait_until_solid(m: &FleetModem, probe: Option<&str>, timeout_secs: u64) -> bool {
+    let mut waited = 0u64;
+    while waited < timeout_secs {
+        if m.is_solid(probe) {
+            return true;
+        }
+        thread::sleep(Duration::from_secs(2));
+        waited += 2;
+    }
+    false
+}
+
+fn first_solid_other(modems: &[FleetModem], not: usize, probe: Option<&str>) -> Option<usize> {
+    modems
+        .iter()
+        .enumerate()
+        .find(|(i, m)| *i != not && m.is_solid(probe))
+        .map(|(i, _)| i)
+}
+
+pub fn fleet_rotate(cfg: FleetConfig, once: bool) -> Result<(), String> {
+    if cfg.modems.len() < 2 {
+        return Err("fleet-rotate needs at least 2 modems in the config".to_string());
+    }
+    let probe = cfg.probe_url.as_deref();
+    let modems: Vec<FleetModem> = cfg
+        .modems
+        .iter()
+        .map(|mc| FleetModem {
+            cfg: mc.clone(),
+            client: ZTEClient::new(&mc.host, &mc.password, Some(&mc.bind_ip)),
+        })
+        .collect();
+
+    // Pick an initial ACTIVE that is already solid.
+    let mut active = (0..modems.len())
+        .find(|&i| modems[i].is_solid(probe))
+        .ok_or("no modem has a solid connection to start from")?;
+    apply_active(&modems, active)?;
+    println!("[fleet] ACTIVE = {}", modems[active].cfg.name);
+
+    loop {
+        // Rotate the next non-active modem (round-robin for N > 2).
+        let standby = (active + 1) % modems.len();
+        println!("[fleet] rotating STANDBY = {}", modems[standby].cfg.name);
+        match modems[standby].rotate() {
+            Ok(ip) => println!("[fleet]   {} -> IP {}", modems[standby].cfg.name, ip),
+            Err(e) => println!("[fleet]   rotate error on {}: {}", modems[standby].cfg.name, e),
+        }
+
+        if wait_until_solid(&modems[standby], probe, cfg.solid_timeout_seconds) {
+            // Make-before-break: the new path is up before we drop the old one.
+            apply_active(&modems, standby)?;
+            active = standby;
+            println!("[fleet] SWAPPED -> ACTIVE = {}", modems[active].cfg.name);
+        } else {
+            println!(
+                "[fleet] {} not solid after rotate; keeping ACTIVE = {}",
+                modems[standby].cfg.name, modems[active].cfg.name
+            );
+        }
+
+        if once {
+            break;
+        }
+
+        // Dwell, watching the active modem; bail early if it drops.
+        let mut waited = 0u64;
+        while waited < cfg.dwell_seconds {
+            thread::sleep(Duration::from_secs(3));
+            waited += 3;
+            if !modems[active].is_solid(probe) {
+                break;
+            }
+        }
+
+        // Emergency: active lost its bearer -> swap to any solid peer immediately.
+        if !modems[active].is_solid(probe) {
+            if let Some(peer) = first_solid_other(&modems, active, probe) {
+                apply_active(&modems, peer)?;
+                println!(
+                    "[fleet] EMERGENCY swap -> ACTIVE = {} (previous active lost bearer)",
+                    modems[peer].cfg.name
+                );
+                active = peer;
+            } else {
+                println!("[fleet] WARNING: active lost bearer and no solid peer to swap to");
+            }
+        }
+    }
+    Ok(())
+}
+
+impl FleetModem {
+    fn rotate(&self) -> Result<String, String> {
+        self.client.rotate_and_reconnect()
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
     let client = Arc::new(ZTEClient::new(&cli.host, &cli.password, cli.bind_ip.as_deref()));
@@ -887,6 +1156,27 @@ fn main() {
 
         Some(Commands::Ui { port, no_open }) => {
             run_ui_server(client, port, no_open);
+        }
+
+        Some(Commands::FleetRotate { config, once }) => {
+            let parsed = std::fs::read_to_string(&config)
+                .map_err(|e| format!("cannot read config {}: {}", config, e))
+                .and_then(|s| {
+                    serde_json::from_str::<FleetConfig>(&s)
+                        .map_err(|e| format!("invalid fleet config JSON: {}", e))
+                });
+            match parsed {
+                Ok(fc) => {
+                    if let Err(e) = fleet_rotate(fc, once) {
+                        eprintln!("[fleet] error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+            }
         }
     }
 }
