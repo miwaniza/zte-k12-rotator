@@ -16,6 +16,7 @@ mod api;
 mod backend;
 mod kernel;
 mod modules;
+mod settings;
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {

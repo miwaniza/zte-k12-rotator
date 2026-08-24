@@ -166,6 +166,21 @@ impl Kernel {
         let ctx = cc.egui_ctx.clone();
         crate::backend::spawn(cmd_rx, ev_tx, move || ctx.request_repaint());
 
+        // Auto-connect with saved credentials so status/towers/history populate
+        // on launch without re-entering the password every time.
+        let saved = crate::settings::load();
+        if !saved.password.is_empty() {
+            let bind_ip = {
+                let b = saved.bind_ip.trim();
+                if b.is_empty() { None } else { Some(b.to_string()) }
+            };
+            let _ = cmd_tx.send(Command::Configure {
+                host: saved.host.clone(),
+                password: saved.password.clone(),
+                bind_ip,
+            });
+        }
+
         let (tray, tray_rotate, tray_show, tray_quit) = build_tray();
 
         Self {

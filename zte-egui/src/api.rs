@@ -21,6 +21,9 @@ pub enum Command {
     LockBands(Vec<String>),
     /// Re-enable all bands (2G/3G + LTE) and clear locks.
     UnlockBands,
+    /// Lock each LTE band in turn and record the serving cell on each, to
+    /// discover towers per band; restores all bands when done.
+    ScanBands,
     /// Run ONE make-before-break fleet cycle from a fleet.json string.
     FleetOnce(String),
 }

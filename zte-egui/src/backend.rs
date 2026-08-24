@@ -2,11 +2,31 @@
 //! `ZTEClient` and turns `Command`s into modem operations and `Event`s. All the
 //! blocking HTTP happens here, never on the UI thread.
 
+use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender};
 
 use zte_control::{decode_bands, get_first_non_empty, fleet_rotate, FleetConfig, ZTEClient};
 
 use crate::api::{Command, Event, StatusSnapshot};
+
+/// Bands the scanner sweeps (name, LTE mask), matching the web dashboard.
+const SCAN_BANDS: &[(&str, &str)] = &[
+    ("Band 8 (900)", "0x0000000000000080"),
+    ("Band 3 (1800)", "0x0000000000000004"),
+    ("Band 7 (2600)", "0x0000000000000040"),
+    ("Band 20 (800)", "0x0000000000080000"),
+];
+
+/// Seconds the WebUI login is locked for, if currently locked (else None).
+fn lock_seconds(client: &ZTEClient) -> Option<u64> {
+    client
+        .get_cmd("login_lock_time", false)
+        .ok()
+        .and_then(|m| m.get("login_lock_time").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .and_then(|s| s.trim().parse::<i64>().ok())
+        .filter(|n| *n > 0)
+        .map(|n| n as u64)
+}
 
 /// Spawn the backend worker. `repaint` wakes the egui UI after each event batch.
 pub fn spawn(cmd_rx: Receiver<Command>, ev_tx: Sender<Event>, repaint: impl Fn() + Send + 'static) {
@@ -30,6 +50,13 @@ pub fn spawn(cmd_rx: Receiver<Command>, ev_tx: Sender<Event>, repaint: impl Fn()
                             "Connected to {} (read-only — enter a password for control & live IP/band)",
                             host
                         ));
+                    } else if let Some(secs) = lock_seconds(&client) {
+                        // Attempting a login during a lockout only extends it, so don't.
+                        password_good = false;
+                        let _ = ev_tx.send(Event::Error(format!(
+                            "WebUI login is locked (~{}s left, too many attempts). Wait, then Connect again.",
+                            secs
+                        )));
                     } else {
                         // Log in exactly once, here.
                         match client.ensure_logged_in() {
@@ -95,6 +122,38 @@ pub fn spawn(cmd_rx: Receiver<Command>, ev_tx: Sender<Event>, repaint: impl Fn()
                         let _ = ev_tx.send(Event::Status(s));
                     }
                     let _ = ev_tx.send(Event::Busy(false));
+                }
+                Command::ScanBands => {
+                    let _ = ev_tx.send(Event::Busy(true));
+                    log(&ev_tx, "Scanning bands for towers…".into());
+                    for (name, mask) in SCAN_BANDS {
+                        log(&ev_tx, format!("  scanning {}…", name));
+                        // Clear cell lock, then force this LTE band only (2G/3G off)
+                        // so the modem camps on whatever LTE cell that band offers.
+                        let mut clr = HashMap::new();
+                        clr.insert("lte_earfcn_lock".to_string(), "0".to_string());
+                        clr.insert("lte_pci_lock".to_string(), "0".to_string());
+                        let _ = client.post_cmd("LTE_LOCK_CELL_SET", clr, true);
+                        let mut p = HashMap::new();
+                        p.insert("is_gw_band".to_string(), "0".to_string());
+                        p.insert("gw_band_mask".to_string(), "0".to_string());
+                        p.insert("is_lte_band".to_string(), "1".to_string());
+                        p.insert("lte_band_mask".to_string(), (*mask).to_string());
+                        let _ = client.post_cmd("BAND_SELECT", p, true);
+                        std::thread::sleep(std::time::Duration::from_millis(3000));
+                        // Recording happens via record_tower when the kernel gets this Status.
+                        if let Ok(s) = fetch_status(&client, password_good) {
+                            let _ = ev_tx.send(Event::Status(s));
+                        }
+                    }
+                    log(&ev_tx, "Restoring all bands…".into());
+                    let _ = client.unlock_bands();
+                    std::thread::sleep(std::time::Duration::from_millis(2000));
+                    if let Ok(s) = fetch_status(&client, password_good) {
+                        let _ = ev_tx.send(Event::Status(s));
+                    }
+                    let _ = ev_tx.send(Event::Busy(false));
+                    log(&ev_tx, "Band scan complete.".into());
                 }
                 Command::FleetOnce(json) => {
                     let _ = ev_tx.send(Event::Busy(true));

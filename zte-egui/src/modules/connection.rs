@@ -10,10 +10,11 @@ pub struct ConnectionModule {
 
 impl Default for ConnectionModule {
     fn default() -> Self {
+        let s = crate::settings::load();
         Self {
-            host: "http://192.168.8.1".to_string(),
-            password: String::new(),
-            bind_ip: String::new(),
+            host: s.host,
+            password: s.password,
+            bind_ip: s.bind_ip,
             show_pw: false,
         }
     }
@@ -42,12 +43,17 @@ impl Module for ConnectionModule {
         ui.horizontal(|ui| {
             ui.checkbox(&mut self.show_pw, "show");
             if ui.button("Connect").clicked() {
-                let bind_ip = {
-                    let b = self.bind_ip.trim();
-                    if b.is_empty() { None } else { Some(b.to_string()) }
-                };
+                let host = self.host.trim().to_string();
+                let bind_ip_raw = self.bind_ip.trim().to_string();
+                // Remember for next launch (auto-connect).
+                crate::settings::save(&crate::settings::ConnSettings {
+                    host: host.clone(),
+                    password: self.password.clone(),
+                    bind_ip: bind_ip_raw.clone(),
+                });
+                let bind_ip = if bind_ip_raw.is_empty() { None } else { Some(bind_ip_raw) };
                 cx.send(Command::Configure {
-                    host: self.host.trim().to_string(),
+                    host,
                     password: self.password.clone(),
                     bind_ip,
                 });

@@ -1,3 +1,4 @@
+use crate::api::Command;
 use crate::kernel::{Ctx, Module};
 
 #[derive(Default)]
@@ -13,8 +14,19 @@ impl Module for TowersModule {
     }
 
     fn view(&mut self, ui: &mut egui::Ui, cx: &Ctx) {
-        ui.heading(format!("Discovered towers ({})", cx.model.towers.len()));
-        ui.label("Serving cells the modem has camped on this session (auto-discovered from status).");
+        ui.horizontal(|ui| {
+            ui.heading(format!("Discovered towers ({})", cx.model.towers.len()));
+            ui.add_enabled_ui(!cx.model.busy, |ui| {
+                if ui.button("🔍  Scan bands").clicked() {
+                    cx.send(Command::ScanBands);
+                }
+            });
+            if cx.model.busy {
+                ui.spinner();
+            }
+        });
+        ui.label("Passively records the current serving cell; 'Scan bands' locks each LTE band in");
+        ui.label("turn to discover a tower per band (needs a login). Restores all bands after.");
         ui.add_space(8.0);
 
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
