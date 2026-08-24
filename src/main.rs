@@ -87,6 +87,30 @@ pub enum Commands {
     /// Band-hop + bearer reset, retrying up to 3 bands until the WAN IP is verified to have changed
     Rotate,
 
+    /// Pin a manual APN profile and make it active
+    ///
+    /// With apn_mode=auto the modem chooses from its built-in table by IMSI, and
+    /// that table can hold retired profiles the carrier no longer accepts.
+    SetApn {
+        #[arg(help = "APN, e.g. www.kyivstar.net")]
+        apn: String,
+
+        #[arg(long, default_value = "Manual", help = "Profile name shown in the WebUI")]
+        name: String,
+
+        #[arg(long, default_value_t = 1, help = "Profile slot")]
+        index: u32,
+
+        #[arg(long, value_parser = ["none", "pap", "chap"], default_value = "none")]
+        auth: String,
+
+        #[arg(long, default_value = "", help = "PPP username (pap/chap only)")]
+        user: String,
+
+        #[arg(long, default_value = "", help = "PPP password (pap/chap only)")]
+        pass: String,
+    },
+
     /// Dial the data bearer, without changing bands (unlike `rotate`)
     Connect,
 
@@ -721,6 +745,27 @@ fn main() {
             require_password(&password);
             if !report_rotation(client.rotate_and_reconnect()) {
                 std::process::exit(1);
+            }
+        }
+
+        Some(Commands::SetApn { apn, name, index, auth, user, pass }) => {
+            require_password(&password);
+            let auth = match auth.as_str() {
+                "pap" => zte_control::ApnAuth::Pap { username: user, password: pass },
+                "chap" => zte_control::ApnAuth::Chap { username: user, password: pass },
+                _ => zte_control::ApnAuth::None,
+            };
+            match client.set_apn(&apn, &name, index, auth) {
+                Ok(()) => {
+                    println!("[+] APN set to '{}' (profile '{}', slot {}).", apn, name, index);
+                    println!("    Verify: zte-control get wan_apn,m_profile_name,apn_mode");
+                    println!("    Then:   zte-control connect");
+                }
+                Err(e) => {
+                    eprintln!("[-] {}", e);
+                    eprintln!("    This firmware may use a different APN command; set it in the WebUI instead.");
+                    std::process::exit(1);
+                }
             }
         }
 

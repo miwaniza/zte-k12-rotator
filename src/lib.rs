@@ -63,6 +63,37 @@ const ROTATION_MASKS: &[(&str, &str)] = &[
     ("Band 20 (800 MHz)", "0x0000000000080000"),
 ];
 
+/// PPP authentication for an APN profile. Most carriers, Kyivstar included, need
+/// none; PAP/CHAP take a username and password.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApnAuth {
+    None,
+    Pap { username: String, password: String },
+    Chap { username: String, password: String },
+}
+
+impl ApnAuth {
+    pub fn mode(&self) -> &'static str {
+        match self {
+            ApnAuth::None => "none",
+            ApnAuth::Pap { .. } => "pap",
+            ApnAuth::Chap { .. } => "chap",
+        }
+    }
+    pub fn username(&self) -> &str {
+        match self {
+            ApnAuth::None => "",
+            ApnAuth::Pap { username, .. } | ApnAuth::Chap { username, .. } => username,
+        }
+    }
+    pub fn password(&self) -> &str {
+        match self {
+            ApnAuth::None => "",
+            ApnAuth::Pap { password, .. } | ApnAuth::Chap { password, .. } => password,
+        }
+    }
+}
+
 /// What went wrong. Replaces the `String` errors this crate used to return, which
 /// callers could only inspect by matching on message text.
 #[derive(Debug)]
@@ -718,6 +749,45 @@ impl ZTEClient {
         let mut params = HashMap::new();
         params.insert("ConnectionMode".to_string(), mode.to_string());
         self.post_cmd("SET_CONNECTION_MODE", params, true).map(|_| ())
+    }
+
+    /// Write a manual APN profile and make it the active one.
+    ///
+    /// `apn_mode=auto` lets the modem pick a profile from its built-in table by
+    /// IMSI, which on an MF920U with a Kyivstar SIM selected `www.djuice.com.ua`
+    /// -- a sub-brand retired years ago -- and the carrier rejected the PDP
+    /// context. Pinning the profile manually is the fix.
+    ///
+    /// `APN_PROC_EX` is not in `docs/goform_api_reference.md` and its parameter
+    /// set varies across ZTE firmware; a rejection is reported rather than
+    /// silently ignored (`check_set_result`), so attempting it is safe.
+    pub fn set_apn(&self, apn: &str, profile: &str, index: u32, auth: ApnAuth) -> Result<()> {
+        let idx = index.to_string();
+
+        let mut set = HashMap::new();
+        set.insert("apn_action".to_string(), "set".to_string());
+        set.insert("apn_mode".to_string(), "manual".to_string());
+        set.insert("profile_name".to_string(), profile.to_string());
+        set.insert("wan_apn".to_string(), apn.to_string());
+        set.insert("wan_dial".to_string(), "*99#".to_string());
+        set.insert("apn_select".to_string(), "manual".to_string());
+        set.insert("pdp_type".to_string(), "IP".to_string());
+        set.insert("pdp_select".to_string(), "auto".to_string());
+        set.insert("index".to_string(), idx.clone());
+        set.insert("ppp_auth_mode".to_string(), auth.mode().to_string());
+        set.insert("ppp_username".to_string(), auth.username().to_string());
+        set.insert("ppp_passwd".to_string(), auth.password().to_string());
+        self.post_cmd("APN_PROC_EX", set, true)?;
+
+        // Writing the profile does not select it; without this the modem keeps
+        // using whatever it had.
+        let mut default = HashMap::new();
+        default.insert("apn_action".to_string(), "set_default".to_string());
+        default.insert("apn_mode".to_string(), "manual".to_string());
+        default.insert("set_default_flag".to_string(), "1".to_string());
+        default.insert("pdp_type".to_string(), "IP".to_string());
+        default.insert("index".to_string(), idx);
+        self.post_cmd("APN_PROC_EX", default, true).map(|_| ())
     }
 
     /// Point the modem at ONE LTE band, for tower discovery. Goes through
