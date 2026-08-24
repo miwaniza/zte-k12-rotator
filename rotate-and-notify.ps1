@@ -8,24 +8,26 @@ if (-not (Test-Path "$InstallDir\zte-control.exe")) {
     $InstallDir = $PSScriptRoot
 }
 
-# 1. Trigger rotation via local service API or binary
+# 1. Trigger rotation via local service API or binary.
+# `verified` is the honest signal: the API reports status=success whenever the
+# bearer came back, which is not the same as the public address having changed.
 $Rotated = $false
 try {
-    $resp = Invoke-RestMethod -Uri "http://127.0.0.1:8080/api/reconnect" -TimeoutSec 10
-    if ($resp.status -eq "success") { $Rotated = $true }
+    $resp = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8080/api/rotate" -Headers @{"X-Requested-With"="XMLHttpRequest"} -TimeoutSec 90
+    if ($resp.verified) { $Rotated = $true }
+    elseif ($resp.detail) { Write-Host "[!] $($resp.detail)" }
 } catch {
     Start-Process "$InstallDir\zte-control.exe" -ArgumentList "reconnect" -Wait -WindowStyle Hidden
-    $Rotated = $true
 }
 
 Start-Sleep -Seconds 3
 
 # 2. Query status & new public IP + Region
 $NewIp = "--"
-$Region = "Київська обл."
-$City = "Київ"
-$Country = "UA"
-$Isp = "Kyivstar"
+$Region = "—"
+$City = "—"
+$Country = "—"
+$Isp = "—"
 $Band = "LTE"
 $Pci = "--"
 $Rsrp = "--"
@@ -48,7 +50,7 @@ try {
 } catch {}
 
 try {
-    $st = Invoke-RestMethod -Uri "http://127.0.0.1:8080/goform/goform_get_cmd_process?cmd=wan_active_band,lte_pci,lte_rsrp,wan_ipaddr&multi_data=1&isTest=false" -TimeoutSec 3
+    $st = Invoke-RestMethod -Uri "http://127.0.0.1:8080/goform/goform_get_cmd_process?cmd=wan_active_band,lte_pci,lte_rsrp,wan_ipaddr&multi_data=1&isTest=false" -Headers @{"X-Requested-With"="XMLHttpRequest"} -TimeoutSec 3
     if ($st.wan_active_band) { $Band = $st.wan_active_band }
     if ($st.lte_pci) { $Pci = $st.lte_pci }
     if ($st.lte_rsrp) { $Rsrp = $st.lte_rsrp }
@@ -64,7 +66,7 @@ try {
 <toast duration="short">
     <visual>
         <binding template="ToastGeneric">
-            <text>📡 ZTE K12: IP & Регіон змінено! ✅</text>
+            <text>$(if ($Rotated) { "📡 ZTE K12: IP &amp; Регіон змінено! ✅" } else { "📡 ZTE K12: ротація без зміни IP ⚠" })</text>
             <text>🌐 Новий IP: $NewIp</text>
             <text>📍 Регіон: $Region, $City ($Isp) | $Band</text>
         </binding>
@@ -83,7 +85,7 @@ if (-not $toastShown) {
         Add-Type -AssemblyName System.Windows.Forms
         $notify = New-Object System.Windows.Forms.NotifyIcon
         $notify.Icon = [System.Drawing.SystemIcons]::Information
-        $notify.BalloonTipTitle = "📡 ZTE K12: Новий IP отримано! ✅"
+        $notify.BalloonTipTitle = if ($Rotated) { "📡 ZTE K12: Новий IP отримано! ✅" } else { "📡 ZTE K12: ротація без зміни IP ⚠" }
         $notify.BalloonTipText = "IP: $NewIp ($Region, $City) | $Band (PCI $Pci)"
         $notify.Visible = $true
         $notify.ShowBalloonTip(4000)
