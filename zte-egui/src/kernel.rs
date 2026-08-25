@@ -262,7 +262,11 @@ impl eframe::App for Kernel {
         // Periodic read-only status poll. Skipped while the backend is busy: a
         // rotation or band scan blocks the worker for tens of seconds, and polls
         // queued during that window all fire in a burst once it returns.
-        if !self.model.busy && self.last_poll.elapsed() >= Duration::from_secs(3) {
+        //
+        // 5s, not 3s. These are LAN reads the carrier never sees, but they are
+        // still load on a battery-powered device's small web server, and nothing
+        // in this UI changes fast enough to need a 3s refresh.
+        if !self.model.busy && self.last_poll.elapsed() >= Duration::from_secs(5) {
             let _ = self.tx.send(Command::RefreshStatus);
             self.last_poll = Instant::now();
         }

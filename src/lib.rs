@@ -7,7 +7,7 @@ use reqwest::blocking::Client;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, TryLockError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -30,7 +30,36 @@ pub const DEFAULT_ROTATE_ATTEMPTS: u32 = 3;
 /// Per-request HTTP timeout for modem control traffic.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(6);
 /// Gap between polls while waiting for the modem to reach a state.
-const POLL_INTERVAL: Duration = Duration::from_secs(1);
+///
+/// These polls are LAN requests to the modem's own web server -- the carrier
+/// never sees them, so the cost is the embedded server's CPU, not signalling
+/// load. 2s halves the request count without meaningfully delaying detection.
+const POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+// ---------------------------------------------------------------------------
+// Signalling restraint
+//
+// What a carrier's abuse detection actually sees is radio-plane work: PDP
+// context activate/deactivate, and band changes that force a detach/re-attach.
+// Repeated tight cycles of those are the signature of SIM boxes and modem farms,
+// and operators respond by barring the packet-switched domain while leaving
+// voice up. The constants below bound how much of that this crate can generate.
+// ---------------------------------------------------------------------------
+
+/// Refuse to rotate again within this window. Nothing else stopped the tray
+/// button, a cron script and the dashboard from cycling the bearer back to back.
+const MIN_ROTATE_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Pause between rotation attempts inside one call, so a refusing network is not
+/// hammered with immediate retries.
+const ATTEMPT_BACKOFF: Duration = Duration::from_secs(5);
+
+/// Consecutive dial refusals before this client stops trying and reports that
+/// the network is refusing. A modem observed in the field had
+/// `ppp_dial_conn_fail_counter = 60`: the tooling kept re-dialling into a
+/// refusal, which is both futile and precisely the pattern that gets a line
+/// flagged.
+const MAX_CONSECUTIVE_DIAL_FAILURES: u32 = 5;
 /// How long to wait for the bearer after a band change. Re-registration on a new
 /// band takes ~10-20s (measured), so this leaves headroom.
 const BEARER_TIMEOUT: Duration = Duration::from_secs(25);
@@ -114,6 +143,10 @@ pub enum Error {
     CommandRejected { goform_id: String, result: String },
     /// Another rotation is already running against this modem.
     RotationBusy,
+    /// Asked to rotate again inside `MIN_ROTATE_INTERVAL`.
+    RotateTooSoon { wait: Duration },
+    /// The network has refused this many dials in a row; stop trying.
+    DialRefused { consecutive: u32 },
     /// The bearer never came back.
     RotationFailed(String),
     /// Bad fleet configuration, or a routing command that failed.
@@ -136,6 +169,16 @@ impl std::fmt::Display for Error {
                 write!(f, "modem rejected {}: result={}", goform_id, result)
             }
             Error::RotationBusy => write!(f, "a rotation is already in progress on this modem"),
+            Error::RotateTooSoon { wait } => write!(
+                f,
+                "rotated too recently -- wait {}s. Cycling the bearer back to back is the pattern carrier abuse detection looks for",
+                wait.as_secs() + 1
+            ),
+            Error::DialRefused { consecutive } => write!(
+                f,
+                "the network refused {} dials in a row; not retrying. Check the SIM's data subscription rather than re-running this",
+                consecutive
+            ),
             Error::RotationFailed(m) => write!(f, "rotation failed: {}", m),
             Error::Config(m) => write!(f, "{}", m),
         }
@@ -182,6 +225,10 @@ pub struct ZTEClient {
     /// each other's band cursor -- reachable today from the tray button, a
     /// scheduled script and the dashboard at the same time.
     rotation_guard: Arc<Mutex<()>>,
+    /// When the last rotation finished, for `MIN_ROTATE_INTERVAL`.
+    last_rotation: Arc<Mutex<Option<Instant>>>,
+    /// Consecutive dial refusals; reset by any successful bearer.
+    dial_failures: Arc<AtomicU32>,
     /// Where progress messages go; `println!` when unset (the CLI default).
     /// Shared with clones, immutable after construction -- so reporting a line
     /// costs no lock.
@@ -221,6 +268,8 @@ impl ZTEClient {
             firmware_version_cache: Arc::new(Mutex::new(None)),
             band_cycle: Arc::new(AtomicUsize::new(0)),
             rotation_guard: Arc::new(Mutex::new(())),
+            last_rotation: Arc::new(Mutex::new(None)),
+            dial_failures: Arc::new(AtomicU32::new(0)),
             logger: None,
         }
     }
@@ -719,9 +768,30 @@ impl ZTEClient {
     /// in `manual_dial` that simply has not been told to connect needs a dial,
     /// not a rotation.
     pub fn connect(&self) -> Result<()> {
+        // Shares the rotation circuit breaker: repeatedly dialling into a refusal
+        // is the same pattern whether it comes from `connect` or `rotate`.
+        let failures = self.dial_failures.load(Ordering::SeqCst);
+        if failures >= MAX_CONSECUTIVE_DIAL_FAILURES {
+            return Err(Error::DialRefused { consecutive: failures });
+        }
         let mut params = HashMap::new();
         params.insert("notCallback".to_string(), "true".to_string());
         self.post_cmd("CONNECT_NETWORK", params, true).map(|_| ())
+    }
+
+    /// Record whether a dial produced a bearer, feeding the circuit breaker.
+    /// Callers that dial via `connect` should report the outcome here.
+    pub fn note_dial_result(&self, got_bearer: bool) {
+        if got_bearer {
+            self.dial_failures.store(0, Ordering::SeqCst);
+        } else {
+            self.dial_failures.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// How many dials in a row the network has refused.
+    pub fn consecutive_dial_failures(&self) -> u32 {
+        self.dial_failures.load(Ordering::SeqCst)
     }
 
     /// Drop the data bearer.
@@ -819,19 +889,50 @@ impl ZTEClient {
     /// `Ok(Some(ip))` -- bearer returned and its address was read.
     /// `Ok(None)`     -- bearer returned but the address is unreadable.
     /// `Err(_)`       -- no bearer came back, even after restoring all bands.
-    fn rotate_once(&self) -> Result<Option<String>> {
-        let idx = self.band_cycle.fetch_add(1, Ordering::SeqCst) % ROTATION_MASKS.len();
-        let (band_name, band_mask) = ROTATION_MASKS[idx];
-        self.log(&format!("[*] Rotating to frequency {}: mask {}", band_name, band_mask));
+    /// True when this attempt should change band.
+    ///
+    /// The first attempt does NOT: a plain bearer reset usually yields a new
+    /// address on its own, and a band change forces a full detach/re-attach that
+    /// the carrier sees. Escalating only when redialling failed to move the
+    /// address removes radio churn from the common case entirely.
+    fn should_hop_band(attempt: u32) -> bool {
+        attempt > 1
+    }
 
-        // 1. Clear cell lock
-        self.rotation_step("clearing cell lock", self.unlock_cell());
+    /// Clear the cell lock only when one is actually set. This was an
+    /// unconditional SET on every rotation.
+    fn clear_cell_lock_if_set(&self) {
+        let locked = self
+            .get_cmd("lte_earfcn_lock,lte_pci_lock", true)
+            .map(|m| {
+                ["lte_earfcn_lock", "lte_pci_lock"].iter().any(|k| {
+                    m.get(*k)
+                        .and_then(|v| v.as_str())
+                        .map(|s| !s.trim().is_empty() && s.trim() != "0")
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+        if locked {
+            self.rotation_step("clearing cell lock", self.unlock_cell());
+        }
+    }
 
-        // 2. Select target LTE band (keeps 2G/3G as fallback via select_bands)
-        self.rotation_step(
-            &format!("selecting {}", band_name),
-            self.select_bands(band_mask),
-        );
+    fn rotate_once(&self, hop_band: bool) -> Result<Option<String>> {
+        let mut hopped_to = None;
+        if hop_band {
+            let idx = self.band_cycle.fetch_add(1, Ordering::SeqCst) % ROTATION_MASKS.len();
+            let (band_name, band_mask) = ROTATION_MASKS[idx];
+            self.log(&format!("[*] Rotating to frequency {}: mask {}", band_name, band_mask));
+            self.clear_cell_lock_if_set();
+            self.rotation_step(
+                &format!("selecting {}", band_name),
+                self.select_bands(band_mask),
+            );
+            hopped_to = Some(band_name);
+        } else {
+            self.log("[*] Bearer reset (no band change)");
+        }
 
         // 3. Disconnect cellular session
         let mut p1 = HashMap::new();
@@ -851,10 +952,14 @@ impl ZTEClient {
             return Ok(ip);
         }
 
-        // 7. Auto-heal: the target band may have no coverage here. Restore ALL bands
-        //    so the modem can re-register on anything (incl. 3G), and give a full
-        //    re-scan + register + auto-dial time. Guarantees a rotation can never
-        //    strand the modem in NO_SERVICE (which would take it out of the fleet).
+        // 7. Auto-heal, but ONLY if we narrowed the bands. Without a band change
+        //    there is nothing to restore, and running the heal path anyway would
+        //    add a pointless second dial into a network that just refused one.
+        let Some(band_name) = hopped_to else {
+            return Err(Error::RotationFailed(
+                "bearer did not return after a plain reset".to_string(),
+            ));
+        };
         self.log(&format!("[!] bearer did not return on {}; restoring all bands", band_name));
         self.rotation_step("restoring all bands", self.unlock_bands());
         // Register FIRST (on any RAT, incl. 3G), THEN dial -- issuing CONNECT while
@@ -892,15 +997,63 @@ impl ZTEClient {
             Err(TryLockError::Poisoned(p)) => p.into_inner(),
         };
 
+        // Stop dialling into a refusal. Past this point the network is saying no,
+        // and continuing is both pointless and the pattern that gets a line
+        // flagged for abuse.
+        let failures = self.dial_failures.load(Ordering::SeqCst);
+        if failures >= MAX_CONSECUTIVE_DIAL_FAILURES {
+            return Err(Error::DialRefused { consecutive: failures });
+        }
+
+        // Do not cycle the bearer more often than MIN_ROTATE_INTERVAL.
+        if let Ok(guard) = self.last_rotation.lock() {
+            if let Some(last) = *guard {
+                let since = last.elapsed();
+                if since < MIN_ROTATE_INTERVAL {
+                    return Err(Error::RotateTooSoon {
+                        wait: MIN_ROTATE_INTERVAL - since,
+                    });
+                }
+            }
+        }
+
         let budget = max_attempts.max(1);
         // The baseline. `None` means we could not read the old address -- no
         // session, or no bearer yet -- NOT that there was no address.
         let previous = self.read_wan_ip();
+
+        let result = self.rotate_loop(budget, previous);
+
+        // Any bearer at all clears the refusal counter; a rotation that produced
+        // none counts towards the circuit breaker above.
+        match &result {
+            Ok(_) => self.dial_failures.store(0, Ordering::SeqCst),
+            Err(_) => {
+                let n = self.dial_failures.fetch_add(1, Ordering::SeqCst) + 1;
+                if n >= MAX_CONSECUTIVE_DIAL_FAILURES {
+                    self.log(&format!(
+                        "[!] {} consecutive dial refusals -- pausing. The network is refusing this SIM, not the modem misbehaving.",
+                        n
+                    ));
+                }
+            }
+        }
+        if let Ok(mut g) = self.last_rotation.lock() {
+            *g = Some(Instant::now());
+        }
+        result
+    }
+
+    fn rotate_loop(&self, budget: u32, previous: Option<String>) -> Result<RotationOutcome> {
         let mut repeated: Option<String> = None;
         let mut last_err: Option<Error> = None;
 
         for attempt in 1..=budget {
-            match self.rotate_once() {
+            if attempt > 1 {
+                // Space the retries out rather than firing them back to back.
+                thread::sleep(ATTEMPT_BACKOFF);
+            }
+            match self.rotate_once(Self::should_hop_band(attempt)) {
                 Ok(Some(ip)) => match previous.as_deref() {
                     // No baseline: we have an address but cannot claim it differs
                     // from the old one. Retrying will not produce a baseline
@@ -1473,7 +1626,10 @@ pub struct ModemConfig {
     pub gateway: Option<String>,
 }
 
-fn default_dwell() -> u64 { 90 }
+/// 15 minutes. This was 90s -- roughly 960 bearer cycles per modem per day,
+/// sustained indefinitely, which is a lot of PDP churn for a consumer line to
+/// show. Set it lower deliberately if a workload needs it.
+fn default_dwell() -> u64 { 900 }
 fn default_solid_timeout() -> u64 { 60 }
 
 const METRIC_ACTIVE: u32 = 10;
@@ -2013,6 +2169,54 @@ mod tests {
     fn test_sim_status_field_alone_can_confirm() {
         assert!(sim_verdict("READY", "", "", false));
         assert!(sim_verdict("modem_sim_ready", "", "", false));
+    }
+
+    #[test]
+    fn test_first_attempt_does_not_change_band() {
+        // A band change forces a detach/re-attach that the carrier sees; a plain
+        // redial usually suffices. Escalate only after the address did not move.
+        assert!(!ZTEClient::should_hop_band(1));
+        assert!(ZTEClient::should_hop_band(2));
+        assert!(ZTEClient::should_hop_band(3));
+    }
+
+    #[test]
+    fn test_rotation_is_rate_limited() {
+        let client = ZTEClient::new("http://127.0.0.1:1", "pw", None);
+        // Pretend a rotation just finished.
+        *client.last_rotation.lock().unwrap() = Some(Instant::now());
+
+        match client.rotate_verified(1) {
+            Err(Error::RotateTooSoon { wait }) => {
+                assert!(wait <= MIN_ROTATE_INTERVAL);
+            }
+            other => panic!("expected RotateTooSoon, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_circuit_breaker_stops_dialling_into_a_refusal() {
+        let client = ZTEClient::new("http://127.0.0.1:1", "pw", None);
+        for _ in 0..MAX_CONSECUTIVE_DIAL_FAILURES {
+            client.note_dial_result(false);
+        }
+        assert_eq!(client.consecutive_dial_failures(), MAX_CONSECUTIVE_DIAL_FAILURES);
+
+        // Both entry points must refuse, not just rotation.
+        match client.rotate_verified(1) {
+            Err(Error::DialRefused { consecutive }) => {
+                assert_eq!(consecutive, MAX_CONSECUTIVE_DIAL_FAILURES)
+            }
+            other => panic!("expected DialRefused from rotate, got {:?}", other),
+        }
+        match client.connect() {
+            Err(Error::DialRefused { .. }) => {}
+            other => panic!("expected DialRefused from connect, got {:?}", other),
+        }
+
+        // A bearer clears it.
+        client.note_dial_result(true);
+        assert_eq!(client.consecutive_dial_failures(), 0);
     }
 
     #[test]

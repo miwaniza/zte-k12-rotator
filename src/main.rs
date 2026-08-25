@@ -774,11 +774,18 @@ fn main() {
             match client.connect() {
                 Ok(()) => {
                     println!("[*] Dial issued; waiting for the bearer…");
-                    match client.await_bearer(Duration::from_secs(30)) {
+                    let bearer = client.await_bearer(Duration::from_secs(30));
+                    client.note_dial_result(bearer.is_some());
+                    match bearer {
                         Some(Some(ip)) => println!("[+] Bearer up. WAN IP: {}", ip),
                         Some(None) => println!("[+] Bearer up (WAN IP not readable)."),
                         None => {
                             eprintln!("[-] No bearer after 30s. Check registration with `diagnose`.");
+                            let n = client.consecutive_dial_failures();
+                            if n > 1 {
+                                eprintln!("    {} refusals in a row now. If this keeps up the network is refusing the SIM,", n);
+                                eprintln!("    not the modem failing -- re-running this only adds to the pattern.");
+                            }
                             std::process::exit(1);
                         }
                     }
