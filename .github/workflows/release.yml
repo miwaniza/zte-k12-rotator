@@ -22,10 +22,45 @@ permissions:
 
 jobs:
   # -------------------------------------------------------------
+  # 0. Tests, lints, formatting -- gate the build on these
+  # -------------------------------------------------------------
+  test:
+    name: Test & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: test
+
+      # zte-egui needs GTK/X11 headers on Linux to build (eframe -> winit).
+      - name: Install Linux GUI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libxdo-dev libayatana-appindicator3-dev
+
+      # No `cargo fmt --check` gate: the tree predates rustfmt and reformatting it
+      # would be a separate, repo-wide change.
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace
+
+  # -------------------------------------------------------------
   # 1. Multi-Platform Build Matrix
   # -------------------------------------------------------------
   build:
     name: Build - ${{ matrix.name }}
+    needs: test
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -67,25 +102,35 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Build Windows Binary
+      # -p is explicit: the workspace root is a package, so a bare `cargo build`
+      # would build only the CLI and silently skip the desktop app.
+      - name: Build Windows Binaries (CLI + desktop app)
         if: matrix.os == 'windows-latest'
-        run: cargo build --release --target ${{ matrix.target }}
+        run: |
+          cargo build --release -p zte-control --target ${{ matrix.target }}
+          cargo build --release -p zte-egui --target ${{ matrix.target }}
 
-      - name: Build macOS Universal Binary
+      - name: Build macOS Universal Binaries (CLI + desktop app)
         if: matrix.os == 'macos-latest'
         run: |
-          cargo build --release --target aarch64-apple-darwin
-          cargo build --release --target x86_64-apple-darwin
+          for t in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --release -p zte-control --target "$t"
+            cargo build --release -p zte-egui --target "$t"
+          done
           mkdir -p target/universal
-          lipo -create \
-            target/aarch64-apple-darwin/release/zte-control \
-            target/x86_64-apple-darwin/release/zte-control \
-            -output target/universal/zte-control
-          lipo -info target/universal/zte-control
+          for bin in zte-control zte-egui; do
+            lipo -create \
+              "target/aarch64-apple-darwin/release/$bin" \
+              "target/x86_64-apple-darwin/release/$bin" \
+              -output "target/universal/$bin"
+            lipo -info "target/universal/$bin"
+          done
 
+      # Linux ships the CLI only; the egui app would pull GTK/X11 build deps that
+      # a headless CLI release does not need.
       - name: Build Linux Binary
         if: matrix.os == 'ubuntu-latest'
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release -p zte-control --target ${{ matrix.target }}
 
       # Package Windows Distribution (Full Zip with all scripts)
       - name: Package Windows Complete Dist (Zip)
@@ -97,6 +142,7 @@ jobs:
           New-Item -ItemType Directory -Path "$DistDir/tools" -Force | Out-Null
           
           Copy-Item "target/${{ matrix.target }}/release/zte-control.exe" "$DistDir/zte-control.exe" -Force
+          Copy-Item "target/${{ matrix.target }}/release/zte-egui.exe" "$DistDir/zte-egui.exe" -Force
           Copy-Item "web/index.html" "$DistDir/web/index.html" -Force
           Copy-Item "web/manifest.json" "$DistDir/web/manifest.json" -Force -ErrorAction SilentlyContinue
           Copy-Item "web/sw.js" "$DistDir/web/sw.js" -Force -ErrorAction SilentlyContinue
@@ -114,7 +160,7 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: |
           cp target/universal/zte-control ${{ matrix.binary }}
-          tar -czf ${{ matrix.archive }} -C target/universal zte-control
+          tar -czf ${{ matrix.archive }} -C target/universal zte-control zte-egui
 
       # Package Linux Archive
       - name: Package Linux Archive
@@ -159,14 +205,17 @@ jobs:
           echo "=== Collected Release Assets ==="
           ls -lh release_assets/
 
+      # A manual run publishes to a rolling `nightly` prerelease. It used to reuse
+      # the fixed tag `v1.0.0`, so any dispatch overwrote the assets of a released
+      # version with an untagged build.
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}
-          name: ${{ startsWith(github.ref, 'refs/tags/') && format('ZTE K12 Rotator {0}', github.ref_name) || 'ZTE K12 Rotator v1.0.0 (Latest)' }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'nightly' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && format('ZTE K12 Rotator {0}', github.ref_name) || format('ZTE K12 Rotator nightly ({0})', github.sha) }}
           files: release_assets/*
           generate_release_notes: true
           draft: false
-          prerelease: false
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

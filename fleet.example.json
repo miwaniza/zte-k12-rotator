@@ -1,0 +1,25 @@
+{
+  "dwell_seconds": 90,
+  "solid_timeout_seconds": 45,
+  "probe_url": "http://cp.cloudflare.com/generate_204",
+  "modems": [
+    {
+      "name": "k12",
+      "host": "http://192.168.0.1",
+      "password": "CHANGE_ME",
+      "bind_ip": "192.168.0.100",
+      "iface_index": 21,
+      "iface_name": "usb0",
+      "gateway": "192.168.0.1"
+    },
+    {
+      "name": "mf920u",
+      "host": "http://192.168.8.1",
+      "password": "CHANGE_ME",
+      "bind_ip": "192.168.8.178",
+      "iface_index": 44,
+      "iface_name": "usb1",
+      "gateway": "192.168.8.1"
+    }
+  ]
+}

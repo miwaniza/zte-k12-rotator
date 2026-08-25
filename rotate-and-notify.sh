@@ -12,14 +12,21 @@ if [ ! -x "$BIN" ]; then
     fi
 fi
 
-# 1. Execute direct rotation via HTTP API or CLI
+# 1. Execute direct rotation via HTTP API or CLI. One call only: the old code
+#    used a first request as an "is the service up?" probe, which itself
+#    rotated, so every run rotated twice.
 NEW_IP=""
-if curl -s --connect-timeout 1 http://127.0.0.1:8080/api/reconnect >/dev/null 2>&1; then
-    NEW_IP=$(curl -s http://127.0.0.1:8080/api/reconnect | sed -n 's/.*"wan_ip":"\([^"]*\)".*/\1/p' || true)
+ROTATE_JSON=$(curl -s --connect-timeout 2 -X POST \
+    -H "X-Requested-With: XMLHttpRequest" \
+    http://127.0.0.1:8080/api/rotate 2>/dev/null || true)
+# Only a verified rotation reports an address; "verified":false means the
+# bearer came back but the IP is unchanged or unreadable.
+if printf '%s' "$ROTATE_JSON" | grep -q '"verified":true'; then
+    NEW_IP=$(printf '%s' "$ROTATE_JSON" | sed -n 's/.*"wan_ip":"\([^"]*\)".*/\1/p' || true)
 fi
 
-if [ -z "$NEW_IP" ] || [ "$NEW_IP" = "reconnected" ]; then
-    NEW_IP=$("$BIN" reconnect 2>&1 | grep -o 'New WAN IP: .*' | awk '{print $NF}' || true)
+if [ -z "$NEW_IP" ]; then
+    NEW_IP=$("$BIN" reconnect 2>&1 | sed -n 's/.*new WAN IP \([0-9.]*\).*/\1/p' || true)
 fi
 
 # 2. Fetch fresh Geo-IP details (Region, City, ISP)
@@ -30,8 +37,8 @@ REGION=$(echo "$GEO_JSON" | sed -n 's/.*"regionName":"\([^"]*\)".*/\1/p' || true
 ISP=$(echo "$GEO_JSON" | sed -n 's/.*"isp":"\([^"]*\)".*/\1/p' || true)
 
 DISPLAY_IP="${PUB_IP:-$NEW_IP}"
-DISPLAY_LOC="${REGION:-Київська обл.}, ${CITY:-Київ}"
-DISPLAY_ISP="${ISP:-Kyivstar}"
+DISPLAY_LOC="${REGION:-—}, ${CITY:-—}"
+DISPLAY_ISP="${ISP:-—}"
 
 # 3. Fire Native macOS Notification Banner
 if [ -n "$DISPLAY_IP" ]; then

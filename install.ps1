@@ -12,7 +12,11 @@ Write-Host "==================================================================" 
 Write-Host ""
 
 $InstallDir = "$env:LOCALAPPDATA\zte-k12-rotator"
-$ZipUrl = "https://raw.githubusercontent.com/miwaniza/zte-k12-rotator/main/dist/zte-k12-rotator-windows.zip"
+# The published release asset, built by CI from a tagged commit. This used to
+# fetch a hand-committed blob off `main` (raw.githubusercontent .../dist/...),
+# which could be any age relative to the source and matched no release.
+$Repo = "miwaniza/zte-k12-rotator"
+$ZipUrl = "https://github.com/$Repo/releases/latest/download/zte-k12-rotator-windows.zip"
 $TempZip = "$env:TEMP\zte-k12-rotator-windows.zip"
 
 Write-Host "[*] Target Directory: $InstallDir" -ForegroundColor Gray
@@ -54,7 +58,7 @@ if (-not (Test-Path "$InstallDir\zte-control.exe")) { $InstallDir = $PSScriptRoo
 
 # 1. Trigger rotation
 try {
-    $resp = Invoke-RestMethod -Uri "http://127.0.0.1:8080/api/reconnect" -TimeoutSec 6
+    $resp = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8080/api/rotate" -Headers @{"X-Requested-With"="XMLHttpRequest"} -TimeoutSec 90
 } catch {
     Start-Process "$InstallDir\zte-control.exe" -ArgumentList "reconnect" -Wait -WindowStyle Hidden
 }
@@ -63,9 +67,9 @@ Start-Sleep -Seconds 3
 
 # 2. Query status & new public IP
 $NewIp = "--"
-$City = "Київ"
-$Country = "UA"
-$Isp = "Kyivstar"
+$City = "—"
+$Country = "—"
+$Isp = "—"
 $Band = "LTE"
 $Pci = "--"
 $Rsrp = "--"
@@ -81,7 +85,7 @@ try {
 } catch {}
 
 try {
-    $st = Invoke-RestMethod -Uri "http://127.0.0.1:8080/goform/goform_get_cmd_process?cmd=wan_active_band,lte_pci,lte_rsrp,wan_ipaddr&multi_data=1&isTest=false" -TimeoutSec 3
+    $st = Invoke-RestMethod -Uri "http://127.0.0.1:8080/goform/goform_get_cmd_process?cmd=wan_active_band,lte_pci,lte_rsrp,wan_ipaddr&multi_data=1&isTest=false" -Headers @{"X-Requested-With"="XMLHttpRequest"} -TimeoutSec 3
     if ($st.wan_active_band) { $Band = $st.wan_active_band }
     if ($st.lte_pci) { $Pci = $st.lte_pci }
     if ($st.lte_rsrp) { $Rsrp = $st.lte_rsrp }

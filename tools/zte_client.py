@@ -19,7 +19,9 @@ import subprocess
 import sys
 import time
 
-COOKIE_FILE = os.path.expanduser("~/.superset/projects/zte-throttle/scratch/session_cookie.txt")
+# Session cookies live under the user's own cache dir. This used to point into
+# an unrelated project's scratch tree (~/.superset/projects/zte-throttle).
+COOKIE_FILE = os.path.expanduser("~/.cache/zte-control/session_cookie.txt")
 
 class ZTEK12Client:
     def __init__(self, host="192.168.0.1", iface="en9", cookie_file=COOKIE_FILE, debug=False):
@@ -73,8 +75,10 @@ class ZTEK12Client:
         url = f"{self.base_url}/goform/goform_get_cmd_process?cmd={cmd_str}{m}&isTest=false&_={int(time.time()*1000)}"
         return self._exec(url)
 
-    def login(self, password="353FALM5"):
+    def login(self, password):
         """Perform challenge-response login using router LD salt."""
+        if not password:
+            raise ValueError("a WebUI password is required (--password or ZTE_PASSWORD)")
         res_ld = self.goform_get("LD", multi_data=False)
         ld = res_ld.get("LD", "")
         p1 = self.sha256_upper(password)
@@ -137,7 +141,10 @@ def main():
 
     # Login
     login_p = subparsers.add_parser("login", help="Authenticate with WebUI password")
-    login_p.add_argument("--password", "-p", default="353FALM5", help="WebUI password (default: 353FALM5)")
+    # No default: a password baked into the source is a credential shipped to
+    # everyone who clones the repo.
+    login_p.add_argument("--password", "-p", default=os.environ.get("ZTE_PASSWORD", ""),
+                         help="WebUI password (or set ZTE_PASSWORD)")
 
     # Status
     subparsers.add_parser("status", help="Get full cellular RF signal & device status")
@@ -154,6 +161,8 @@ def main():
     client = ZTEK12Client(host=args.host, iface=args.iface, debug=args.debug)
 
     if args.command == "login":
+        if not args.password:
+            sys.exit("[-] No password. Pass --password <pw> or set ZTE_PASSWORD.")
         print(f"[*] Logging in to ZTE K12 at {args.host} (via {args.iface})...")
         res = client.login(args.password)
         print(f"[+] Login Result: {json.dumps(res)}")
@@ -163,9 +172,14 @@ def main():
     elif args.command == "status":
         status = client.get_status()
         if status.get("loginfo") != "ok":
-            print("[*] Session expired or unauthenticated. Logging in with default password...")
-            client.login()
-            status = client.get_status()
+            pw = os.environ.get("ZTE_PASSWORD", "")
+            if not pw:
+                print("[*] Session expired or unauthenticated; set ZTE_PASSWORD or run `login` "
+                      "for the auth-gated fields.")
+            else:
+                print("[*] Session expired or unauthenticated. Logging in with ZTE_PASSWORD...")
+                client.login(pw)
+                status = client.get_status()
         print(json.dumps(status, indent=2, ensure_ascii=False))
 
     elif args.command == "monitor":

@@ -3,3 +3,16 @@ scratch/
 .DS_Store
 *.swp
 *.bak
+
+# Build output. These used to be committed (~8.7 MB of .exe/.zip/.tar.gz) and
+# install.ps1 downloaded the blob straight off `main`; releases are published by
+# CI as GitHub Release assets instead.
+/dist
+
+# Diagnostic dumps: these carry IMEI, ICCID and IMSI.
+sim-report.*
+sim-raw.*
+*-diagnostics.json
+diag-*.txt
+diag-*.json
+apn-fields.*

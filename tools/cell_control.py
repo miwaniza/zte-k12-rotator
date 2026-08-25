@@ -19,7 +19,9 @@ import sys
 import time
 import webbrowser
 
-COOKIE_FILE = os.path.expanduser("~/.superset/projects/zte-throttle/scratch/session_cookie.txt")
+# Session cookies live under the user's own cache dir. This used to point into
+# an unrelated project's scratch tree (~/.superset/projects/zte-throttle).
+COOKIE_FILE = os.path.expanduser("~/.cache/zte-control/session_cookie.txt")
 
 # Band masks for ZTE K12 (ZX297520 / MC888x framework)
 BAND_MASKS = {
@@ -39,7 +41,7 @@ PROVIDERS = {
 }
 
 class CellController:
-    def __init__(self, host="192.168.0.1", iface="en9", password="353FALM5"):
+    def __init__(self, host="192.168.0.1", iface="en9", password=""):
         self.host = host.rstrip("/")
         self.base_url = f"http://{self.host}"
         self.iface = iface
@@ -80,6 +82,8 @@ class CellController:
 
     def login(self):
         """Authenticate using SHA256 challenge-response."""
+        if not self.password:
+            raise ValueError("a WebUI password is required (--password or ZTE_PASSWORD)")
         url_ld = f"{self.base_url}/goform/goform_get_cmd_process?cmd=LD&isTest=false&_={int(time.time()*1000)}"
         res_ld = self._exec(url_ld)
         ld = res_ld.get("LD", "") if isinstance(res_ld, dict) else ""
@@ -259,7 +263,10 @@ def main():
     parser = argparse.ArgumentParser(description="ZTE K12 Cell Tower & Band Controller")
     parser.add_argument("--host", default="192.168.0.1", help="Target router IP (default: 192.168.0.1)")
     parser.add_argument("--iface", default="en9", help="Network interface (default: en9)")
-    parser.add_argument("--password", "-p", default="353FALM5", help="WebUI password")
+    # No default: a password baked into the source is a credential shipped to
+    # everyone who clones the repo.
+    parser.add_argument("--password", "-p", default=os.environ.get("ZTE_PASSWORD", ""),
+                        help="WebUI password (or set ZTE_PASSWORD)")
 
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 

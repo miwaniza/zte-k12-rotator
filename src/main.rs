@@ -1,39 +1,39 @@
 use clap::{Parser, Subcommand};
-use reqwest::blocking::Client;
-use sha2::{Digest, Sha256};
-use std::collections::HashMap;
-use std::io::Read;
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use reqwest::blocking::Client;
 use tiny_http::{Header, Method, Response, Server};
+use zte_control::{
+    check_for_updates, chrono_ms, decode_bands, fleet_rotate, get_first_non_empty, stdout_logger,
+    DiagnosticReport, FleetConfig, ZTEClient, VERSION,
+};
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
 const EMBEDDED_UI_HTML: &str = include_str!("../web/index.html");
 const EMBEDDED_MANIFEST: &str = include_str!("../web/manifest.json");
 const EMBEDDED_SW_JS: &str = include_str!("../web/sw.js");
 const EMBEDDED_ICON_SVG: &str = include_str!("../web/icon.svg");
 
-static BAND_CYCLE_INDEX: AtomicUsize = AtomicUsize::new(0);
 
-const ROTATION_MASKS: &[(&str, &str)] = &[
-    ("Band 8 (900 MHz)",  "0x0000000000000080"),
-    ("Band 3 (1800 MHz)", "0x0000000000000004"),
-    ("Band 7 (2600 MHz)", "0x0000000000000040"),
-    ("Band 20 (800 MHz)", "0x0000000000080000"),
-    ("All Bands (Auto)",  "0x00000000000800c4"),
-];
 
 #[derive(Parser, Debug)]
 #[command(name = "zte-control", author, version = VERSION, about = "Universal Controller, IP & Region Rotator for ZTE K12 (ZX297520)")]
 pub struct Cli {
-    #[arg(long, default_value = "http://192.168.0.1", help = "Router base URL")]
+    #[arg(long, default_value = "http://192.168.8.1", help = "Router base URL")]
     pub host: String,
 
-    #[arg(short, long, default_value = "353FALM5", help = "WebUI admin password")]
-    pub password: String,
+    /// No default: a shipped default password is a credential in everyone's copy
+    /// of the source, and it silently authenticates against whatever modem is on
+    /// the other end. Read-only commands still work without it.
+    #[arg(
+        short,
+        long,
+        env = "ZTE_PASSWORD",
+        hide_env_values = true,
+        help = "WebUI admin password (or set ZTE_PASSWORD)"
+    )]
+    pub password: Option<String>,
 
     #[arg(long, help = "Optional source IP to bind to")]
     pub bind_ip: Option<String>,
@@ -77,11 +77,67 @@ pub enum Commands {
         reconnect: bool,
     },
 
-    /// Force full band-hop + RF disconnect & reconnect to rotate IP & Region
+    /// Re-enable ALL bands (2G/3G + every LTE band) and clear locks -- recovers a
+    /// modem stuck in NO_SERVICE after a narrow band lock
+    UnlockBands,
+
+    /// Alias for `rotate`: band-hop + RF disconnect & reconnect
     Reconnect,
 
-    /// Rotate to next LTE frequency band + cell and obtain a guaranteed new IP
+    /// Band-hop + bearer reset, retrying up to 3 bands until the WAN IP is verified to have changed
     Rotate,
+
+    /// Pin a manual APN profile and make it active
+    ///
+    /// With apn_mode=auto the modem chooses from its built-in table by IMSI, and
+    /// that table can hold retired profiles the carrier no longer accepts.
+    SetApn {
+        #[arg(help = "APN, e.g. www.kyivstar.net")]
+        apn: String,
+
+        #[arg(long, default_value = "Manual", help = "Profile name shown in the WebUI")]
+        name: String,
+
+        #[arg(long, default_value_t = 1, help = "Profile slot")]
+        index: u32,
+
+        #[arg(long, value_parser = ["none", "pap", "chap"], default_value = "none")]
+        auth: String,
+
+        #[arg(long, default_value = "", help = "PPP username (pap/chap only)")]
+        user: String,
+
+        #[arg(long, default_value = "", help = "PPP password (pap/chap only)")]
+        pass: String,
+    },
+
+    /// Dial the data bearer, without changing bands (unlike `rotate`)
+    Connect,
+
+    /// Drop the data bearer
+    Disconnect,
+
+    /// Set whether the modem dials on its own or waits to be told
+    SetDialMode {
+        #[arg(value_parser = ["auto", "manual"], help = "auto = dial on its own")]
+        mode: String,
+    },
+
+    /// Read arbitrary WebUI fields through an authenticated session
+    ///
+    /// Most interesting fields (APN, dial mode, band mask, cell identifiers) are
+    /// auth-gated: querying them with plain curl returns empty strings rather
+    /// than an error, which reads as "this firmware has no such field".
+    Get {
+        #[arg(required = true, help = "Comma-separated field names")]
+        keys: String,
+
+        #[arg(long, help = "Output raw JSON instead of a table")]
+        json: bool,
+
+        #[arg(long, help = "List every field, including the empty ones")]
+        all: bool,
+    },
 
     /// Check for application updates from GitHub
     CheckUpdate,
@@ -92,13 +148,32 @@ pub enum Commands {
         action: ServiceAction,
     },
 
-    /// Launch built-in Web Control Dashboard with automated CORS proxy & PWA
+    /// Run comprehensive offline diagnostics (SIM detection, PIN/PUK, signal, band locks, carrier registration)
+    #[command(alias = "diag")]
+    Diagnose {
+        #[arg(long, help = "Output raw JSON format")]
+        json: bool,
+    },
+
+    /// Launch the local Web Control Dashboard (loopback-only proxy to the modem WebUI)
     Ui {
+        #[arg(long, default_value = "127.0.0.1", help = "Local HTTP server host")]
+        host: String,
+
         #[arg(short, long, default_value_t = 8080, help = "Local HTTP server port")]
         port: u16,
 
         #[arg(long, help = "Do not automatically open browser")]
         no_open: bool,
+    },
+
+    /// Make-before-break IP rotation across multiple modems (see docs/multi_modem_rotation.md)
+    FleetRotate {
+        #[arg(long, help = "Path to fleet JSON config")]
+        config: String,
+
+        #[arg(long, help = "Run a single rotate+swap cycle and exit (default: loop)")]
+        once: bool,
     },
 }
 
@@ -110,321 +185,308 @@ pub enum ServiceAction {
     Stop,
 }
 
-#[derive(Debug, Clone)]
-pub struct ZTEClient {
-    pub base_url: String,
-    pub password: String,
-    pub client: Client,
+/// Request-handling threads. Each blocks for the whole of a request, and a
+/// rotation can occupy one for minutes -- see `ZTEClient::rotate_verified`, which
+/// refuses concurrent rotations rather than letting them interleave.
+const NUM_WORKERS: usize = 4;
+
+/// The host part of an `Origin`/`Host` authority (`host`, `host:port`, `[::1]:port`).
+fn authority_host(authority: &str) -> &str {
+    let a = authority.trim();
+    match a.strip_prefix('[') {
+        Some(rest) => rest.split(']').next().unwrap_or(""),
+        None => a.split(':').next().unwrap_or(""),
+    }
 }
 
-impl ZTEClient {
-    pub fn new(host: &str, password: &str, bind_ip: Option<&str>) -> Self {
-        let base_url = host.trim_end_matches('/').to_string();
-        let mut builder = Client::builder()
-            .cookie_store(true)
-            .timeout(Duration::from_secs(6));
+fn is_loopback_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
+}
 
-        if let Some(ip_str) = bind_ip {
-            if let Ok(ip) = ip_str.parse::<IpAddr>() {
-                builder = builder.local_address(ip);
+/// Only pages served from this loopback server may talk to it.
+///
+/// This proxy carries an authenticated modem session, so a permissive answer here
+/// would let any site the user happens to visit read the modem's identifiers and
+/// issue SET commands. Matching is on the parsed host, not a prefix: a
+/// `starts_with("http://127.0.0.1")` test would also accept
+/// `http://127.0.0.1.evil.example`. `null` (sandboxed iframes, `file://`) is not
+/// allowed -- an attacker can produce it at will.
+fn origin_allowed(origin: &str) -> bool {
+    origin
+        .strip_prefix("http://")
+        .map(|authority| is_loopback_host(authority_host(authority)))
+        .unwrap_or(false)
+}
+
+fn header_value<'a>(request: &'a tiny_http::Request, name: &str) -> Option<&'a str> {
+    request
+        .headers()
+        .iter()
+        .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name))
+        .map(|h| h.value.as_str())
+}
+
+/// DNS-rebinding guard: an attacker-controlled name that resolves to 127.0.0.1
+/// reaches this server on loopback but carries its own `Host`. Requiring a
+/// loopback `Host` (or the address the operator explicitly bound to) closes that.
+fn host_allowed(request: &tiny_http::Request, bind_host: &str) -> bool {
+    // A wildcard bind is a deliberate "expose this" choice; there is no single
+    // expected Host to check against. `run_ui_server` warns about it at startup.
+    if bind_host == "0.0.0.0" || bind_host == "::" {
+        return true;
+    }
+    match header_value(request, "host") {
+        Some(h) => {
+            let host = authority_host(h);
+            is_loopback_host(host) || host.eq_ignore_ascii_case(bind_host)
+        }
+        None => false,
+    }
+}
+
+/// What a request is allowed to do, decided once per request.
+struct Guard {
+    /// Echoed back as `Access-Control-Allow-Origin`; `None` for same-origin and
+    /// non-browser callers, which need no CORS header at all.
+    cors: Option<String>,
+    /// Set by the dashboard's XHR. A cross-origin page cannot set it without a
+    /// preflight, and preflights from disallowed origins are refused -- so
+    /// requiring it makes drive-by requests to the modem proxy impossible.
+    xhr: bool,
+}
+
+fn forbid(request: tiny_http::Request, why: &str) {
+    let body = serde_json::json!({ "error": why }).to_string();
+    let response = Response::from_string(body)
+        .with_status_code(403)
+        .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap());
+    let _ = request.respond(response);
+}
+
+/// A proxy failure as well-formed JSON. Building it with `format!` used to emit
+/// invalid JSON whenever the transport error text contained a quote.
+fn proxy_error(message: &str) -> String {
+    serde_json::json!({ "error": message }).to_string()
+}
+
+fn json_response(body: String, cors: Option<&String>) -> Response<std::io::Cursor<Vec<u8>>> {
+    let mut response = Response::from_string(body)
+        .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap())
+        .with_header(Header::from_bytes(&b"Cache-Control"[..], &b"no-cache, no-store, must-revalidate"[..]).unwrap());
+    if let Some(origin) = cors {
+        if let Ok(h) = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], origin.as_bytes()) {
+            response = response.with_header(h);
+            response = response.with_header(
+                Header::from_bytes(&b"Vary"[..], &b"Origin"[..]).unwrap(),
+            );
+        }
+    }
+    response
+}
+
+fn handle_http_request(
+    mut request: tiny_http::Request,
+    client: &ZTEClient,
+    http_client: &Client,
+    bind_host: &str,
+) {
+    let url_path = request.url().to_string();
+
+    if !host_allowed(&request, bind_host) {
+        forbid(request, "unexpected Host header (possible DNS rebinding)");
+        return;
+    }
+
+    let allow_origin = match header_value(&request, "origin") {
+        Some(origin) if origin_allowed(origin) => Some(origin.to_string()),
+        // A cross-origin caller: refuse outright rather than answering with a
+        // header that happens to be restrictive.
+        Some(_) => {
+            forbid(request, "cross-origin requests are not allowed");
+            return;
+        }
+        None => None,
+    };
+    let guard = Guard {
+        cors: allow_origin,
+        xhr: header_value(&request, "x-requested-with")
+            .map(|v| v.eq_ignore_ascii_case("XMLHttpRequest"))
+            .unwrap_or(false),
+    };
+    let cors = guard.cors.clone();
+
+    if *request.method() == Method::Options {
+        // Reached only with an allowed origin (others were refused above).
+        let mut response = Response::empty(204)
+            .with_header(Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS"[..]).unwrap())
+            .with_header(Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, X-Requested-With"[..]).unwrap())
+            .with_header(Header::from_bytes(&b"Access-Control-Max-Age"[..], &b"86400"[..]).unwrap());
+        if let Some(origin) = &cors {
+            if let Ok(h) = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], origin.as_bytes()) {
+                response = response.with_header(h);
             }
         }
-
-        let client = builder.build().unwrap_or_else(|_| Client::new());
-
-        Self {
-            base_url,
-            password: password.to_string(),
-            client,
-        }
+        let _ = request.respond(response);
+        return;
     }
 
-    pub fn sha256_hex_upper(input: &str) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(input.as_bytes());
-        let result = hasher.finalize();
-        hex::encode(result).to_uppercase()
-    }
-
-    pub fn get_cmd(&self, cmd: &str, multi: bool) -> Result<HashMap<String, serde_json::Value>, String> {
-        let multi_flag = if multi { "&multi_data=1" } else { "" };
-        let url = format!(
-            "{}/goform/goform_get_cmd_process?cmd={}{}&isTest=false&_={}",
-            self.base_url,
-            cmd,
-            multi_flag,
-            chrono_ms()
-        );
-
-        let resp = self
-            .client
-            .get(&url)
-            .header("X-Requested-With", "XMLHttpRequest")
-            .header("Referer", format!("{}/index.html", self.base_url))
-            .send()
-            .map_err(|e| format!("HTTP GET error: {}", e))?;
-
-        let json_map: HashMap<String, serde_json::Value> = resp
-            .json()
-            .map_err(|e| format!("JSON decode error: {}", e))?;
-        Ok(json_map)
-    }
-
-    pub fn get_ad_token(&self) -> Result<String, String> {
-        let rd_map = self.get_cmd("RD", false)?;
-        let rd = rd_map
-            .get("RD")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
+    if url_path.starts_with("/manifest.json") {
+        let response = Response::from_string(EMBEDDED_MANIFEST)
+            .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/manifest+json; charset=utf-8"[..]).unwrap())
+            .with_header(Header::from_bytes(&b"Cache-Control"[..], &b"no-cache, no-store, must-revalidate"[..]).unwrap());
+        let _ = request.respond(response);
+    } else if url_path.starts_with("/sw.js") {
+        let response = Response::from_string(EMBEDDED_SW_JS)
+            .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/javascript; charset=utf-8"[..]).unwrap())
+            .with_header(Header::from_bytes(&b"Service-Worker-Allowed"[..], &b"/"[..]).unwrap())
+            .with_header(Header::from_bytes(&b"Cache-Control"[..], &b"no-cache, no-store, must-revalidate"[..]).unwrap());
+        let _ = request.respond(response);
+    } else if url_path.starts_with("/icon.svg") {
+        let response = Response::from_string(EMBEDDED_ICON_SVG)
+            .with_header(Header::from_bytes(&b"Content-Type"[..], &b"image/svg+xml; charset=utf-8"[..]).unwrap());
+        let _ = request.respond(response);
+    } else if url_path.starts_with("/api/reconnect") || url_path.starts_with("/api/rotate") {
+        // Rotating is a state change, so it must not be reachable by a GET that
+        // any page can trigger with an <img> tag.
+        if *request.method() != Method::Post {
+            let body = serde_json::json!({
+                "error": "use POST with X-Requested-With: XMLHttpRequest",
+            })
             .to_string();
-
-        let fw_hash = Self::sha256_hex_upper("BD_SMARTDIGITALUAK12V1.0.0B01");
-        let ad = Self::sha256_hex_upper(&format!("{}{}", fw_hash, rd));
-        Ok(ad)
-    }
-
-    pub fn login(&self) -> Result<bool, String> {
-        let ld_map = self.get_cmd("LD", false)?;
-        let ld = ld_map
-            .get("LD")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        let p1 = Self::sha256_hex_upper(&self.password);
-        let password_hash = Self::sha256_hex_upper(&format!("{}{}", p1, ld));
-
-        let url = format!("{}/goform/goform_set_cmd_process", self.base_url);
-        let mut params = HashMap::new();
-        params.insert("isTest".to_string(), "false".to_string());
-        params.insert("goformId".to_string(), "LOGIN".to_string());
-        params.insert("password".to_string(), password_hash);
-        params.insert("save_login".to_string(), "1".to_string());
-
-        let resp = self
-            .client
-            .post(&url)
-            .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
-            .header("X-Requested-With", "XMLHttpRequest")
-            .header("Referer", format!("{}/index.html", self.base_url))
-            .form(&params)
+            let response = Response::from_string(body)
+                .with_status_code(405)
+                .with_header(Header::from_bytes(&b"Allow"[..], &b"POST"[..]).unwrap())
+                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap());
+            let _ = request.respond(response);
+            return;
+        }
+        if !guard.xhr {
+            forbid(request, "missing X-Requested-With: XMLHttpRequest");
+            return;
+        }
+        let body = match client.rotate_and_reconnect() {
+            Ok(outcome) => serde_json::json!({
+                "status": "success",
+                "action": "rotated",
+                "verified": outcome.verified(),
+                "wan_ip": outcome.ip(),
+                "detail": outcome.summary(),
+                "outcome": outcome,
+            }),
+            // The old code reported `{"status":"success"}` here regardless.
+            Err(e) => serde_json::json!({
+                "status": "error",
+                "action": "rotated",
+                "verified": false,
+                "wan_ip": serde_json::Value::Null,
+                "detail": e.to_string(),
+                "busy": matches!(e, zte_control::Error::RotationBusy),
+            }),
+        };
+        let _ = request.respond(json_response(body.to_string(), cors.as_ref()));
+    } else if url_path.starts_with("/api/update/check") {
+        let body = match check_for_updates() {
+            Ok((current, latest, has_update)) => serde_json::json!({
+                "current": current,
+                "latest": latest,
+                "has_update": has_update,
+            }),
+            Err(e) => serde_json::json!({ "error": e.to_string() }),
+        };
+        let _ = request.respond(json_response(body.to_string(), cors.as_ref()));
+    } else if url_path.starts_with("/api/geo") {
+        let geo_data = http_client
+            .get("http://ip-api.com/json/?fields=status,message,country,countryCode,region,regionName,city,zip,lat,lon,timezone,isp,org,as,query")
             .send()
-            .map_err(|e| format!("Login POST error: {}", e))?;
+            .and_then(|r| r.text())
+            .unwrap_or_else(|_| {
+                http_client
+                    .get("https://ipwho.is/")
+                    .send()
+                    .and_then(|r| r.text())
+                    .unwrap_or_else(|_| "{\"status\":\"fail\"}".to_string())
+            });
 
-        let res_map: HashMap<String, serde_json::Value> = resp
-            .json()
-            .map_err(|e| format!("JSON decode error: {}", e))?;
-
-        if let Some(r) = res_map.get("result").and_then(|v| v.as_str()) {
-            if r == "0" || r == "4" {
-                return Ok(true);
-            }
+        let _ = request.respond(json_response(geo_data, cors.as_ref()));
+    } else if url_path.starts_with("/goform/") {
+        // The proxy replays this process's authenticated modem session, so it is
+        // gated the same way as the rotate endpoints.
+        if !guard.xhr {
+            forbid(request, "missing X-Requested-With: XMLHttpRequest");
+            return;
         }
-        Ok(false)
-    }
+        // Forwarding lives on ZTEClient (`forward_get` / `forward_post`), which
+        // owns the session cookie and the request headers. This used to reach
+        // into `client.client` and rebuild both by hand.
+        let forwarded = if *request.method() == Method::Post {
+            let mut body_bytes = Vec::new();
+            let _ = request.as_reader().read_to_end(&mut body_bytes);
+            client.forward_post(&url_path, body_bytes)
+        } else {
+            client.forward_get(&url_path)
+        };
 
-    pub fn ensure_logged_in(&self) -> Result<(), String> {
-        let status = self.get_cmd("loginfo", false)?;
-        if let Some(s) = status.get("loginfo").and_then(|v| v.as_str()) {
-            if s == "ok" {
-                return Ok(());
-            }
-        }
-        if !self.login()? {
-            return Err("Failed to authenticate to ZTE K12 WebUI".to_string());
-        }
-        Ok(())
-    }
-
-    pub fn post_cmd(&self, goform_id: &str, mut params: HashMap<String, String>, with_ad: bool) -> Result<HashMap<String, serde_json::Value>, String> {
-        self.ensure_logged_in()?;
-
-        if with_ad {
-            let ad_token = self.get_ad_token()?;
-            params.insert("AD".to_string(), ad_token);
-        }
-
-        params.insert("isTest".to_string(), "false".to_string());
-        params.insert("goformId".to_string(), goform_id.to_string());
-
-        let url = format!("{}/goform/goform_set_cmd_process", self.base_url);
-        let resp = self
-            .client
-            .post(&url)
-            .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
-            .header("X-Requested-With", "XMLHttpRequest")
-            .header("Referer", format!("{}/index.html", self.base_url))
-            .form(&params)
-            .send()
-            .map_err(|e| format!("POST command error: {}", e))?;
-
-        let res_map: HashMap<String, serde_json::Value> = resp
-            .json()
-            .map_err(|e| format!("JSON response error: {}", e))?;
-        Ok(res_map)
-    }
-
-    pub fn get_status(&self) -> Result<HashMap<String, serde_json::Value>, String> {
-        self.ensure_logged_in()?;
-        let keys = "wa_inner_version,hardware_version,imei,network_provider,network_type,network_lte_rsrp,lte_rsrp,lte_rsrq,lte_snr,network_sinr,lte_rssi,lte_band_lock,wan_active_band,wan_active_channel,lte_pci,cell_id,network_cell_id,wan_ipaddr,ppp_status,strFullName,strShortName";
-        self.get_cmd(keys, true)
-    }
-
-    pub fn lock_bands(&self, bands: &[String]) -> Result<String, String> {
-        let mut mask: u64 = 0;
-        for b in bands {
-            let s = b.to_uppercase();
-            if s == "B3" || s == "3" { mask |= 0x4; }
-            else if s == "B7" || s == "7" { mask |= 0x40; }
-            else if s == "B8" || s == "8" { mask |= 0x80; }
-            else if s == "B20" || s == "20" { mask |= 0x80000; }
-            else if s == "ALL" { mask |= 0x800c4; }
-        }
-
-        let hex_mask = format!("0x{:016x}", mask);
-        let mut params = HashMap::new();
-        params.insert("is_gw_band".to_string(), "0".to_string());
-        params.insert("gw_band_mask".to_string(), "0".to_string());
-        params.insert("is_lte_band".to_string(), "1".to_string());
-        params.insert("lte_band_mask".to_string(), hex_mask);
-
-        let res = self.post_cmd("BAND_SELECT", params, true)?;
-        Ok(serde_json::to_string(&res).unwrap_or_default())
-    }
-
-    pub fn lock_cell(&self, earfcn: u32, pci: u32) -> Result<String, String> {
-        let mut params = HashMap::new();
-        params.insert("lte_earfcn_lock".to_string(), earfcn.to_string());
-        params.insert("lte_pci_lock".to_string(), pci.to_string());
-
-        let res = self.post_cmd("LTE_LOCK_CELL_SET", params, true)?;
-        Ok(serde_json::to_string(&res).unwrap_or_default())
-    }
-
-    pub fn unlock_cell(&self) -> Result<String, String> {
-        let mut params = HashMap::new();
-        params.insert("lte_earfcn_lock".to_string(), "0".to_string());
-        params.insert("lte_pci_lock".to_string(), "0".to_string());
-        let res = self.post_cmd("LTE_LOCK_CELL_SET", params, true)?;
-        Ok(serde_json::to_string(&res).unwrap_or_default())
-    }
-
-    /// Combined Band-Hop + Carrier Bearer Reset (Guaranteed IP & Region change)
-    pub fn rotate_and_reconnect(&self) -> Result<String, String> {
-        let idx = BAND_CYCLE_INDEX.fetch_add(1, Ordering::SeqCst) % ROTATION_MASKS.len();
-        let (band_name, band_mask) = ROTATION_MASKS[idx];
-        println!("[*] Rotating to frequency {}: mask {}", band_name, band_mask);
-
-        // 1. Clear cell lock
-        let _ = self.unlock_cell();
-
-        // 2. Select target frequency band to force gateway handover
-        let mut p_band = HashMap::new();
-        p_band.insert("is_gw_band".to_string(), "0".to_string());
-        p_band.insert("gw_band_mask".to_string(), "0".to_string());
-        p_band.insert("is_lte_band".to_string(), "1".to_string());
-        p_band.insert("lte_band_mask".to_string(), band_mask.to_string());
-        let _ = self.post_cmd("BAND_SELECT", p_band, true);
-
-        // 3. Disconnect cellular session
-        let mut p1 = HashMap::new();
-        p1.insert("notCallback".to_string(), "true".to_string());
-        let _ = self.post_cmd("DISCONNECT_NETWORK", p1, true);
-
-        // 4. Guard sleep so PGW drops old IP lease
-        thread::sleep(Duration::from_millis(1600));
-
-        // 5. Connect cellular session
-        let mut p2 = HashMap::new();
-        p2.insert("notCallback".to_string(), "true".to_string());
-        let _ = self.post_cmd("CONNECT_NETWORK", p2, true);
-
-        // 6. Wait for PPP connected and return new IP
-        for _ in 0..8 {
-            thread::sleep(Duration::from_millis(1000));
-            if let Ok(st) = self.get_cmd("wan_ipaddr,ppp_status", false) {
-                let ppp = st.get("ppp_status").and_then(|v| v.as_str()).unwrap_or("");
-                let ip = st.get("wan_ipaddr").and_then(|v| v.as_str()).unwrap_or("");
-                if ppp == "ppp_connected" && !ip.is_empty() {
-                    return Ok(ip.to_string());
-                }
-            }
-        }
-        Ok("reconnected".to_string())
-    }
-}
-
-fn chrono_ms() -> u128 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-}
-
-fn decode_bands(mask_str: &str) -> String {
-    let raw = mask_str.trim_start_matches("0x").trim_start_matches("0X");
-    if let Ok(mask) = u64::from_str_radix(raw, 16) {
-        let mut list = Vec::new();
-        if mask & 0x4 != 0 { list.push("B3 (1800)"); }
-        if mask & 0x40 != 0 { list.push("B7 (2600)"); }
-        if mask & 0x80 != 0 { list.push("B8 (900)"); }
-        if mask & 0x80000 != 0 { list.push("B20 (800)"); }
-        if list.is_empty() { "None".to_string() } else { list.join(", ") }
+        let result_body = forwarded.unwrap_or_else(|e| proxy_error(&e.to_string()));
+        let _ = request.respond(json_response(result_body, cors.as_ref()));
     } else {
-        "Auto".to_string()
+        let response = Response::from_string(EMBEDDED_UI_HTML)
+            .with_header(Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap())
+            .with_header(Header::from_bytes(&b"Cache-Control"[..], &b"no-cache, no-store, must-revalidate"[..]).unwrap())
+            .with_header(Header::from_bytes(&b"Pragma"[..], &b"no-cache"[..]).unwrap());
+        let _ = request.respond(response);
     }
 }
 
-fn get_first_non_empty<'a>(map: &'a HashMap<String, serde_json::Value>, keys: &[&str], default_val: &'a str) -> &'a str {
-    for k in keys {
-        if let Some(v) = map.get(*k) {
-            if let Some(s) = v.as_str() {
-                if !s.trim().is_empty() && s != "None" {
-                    return s;
+/// Bind the dashboard listener. Split out from `run_ui_server` so tests can bind
+/// port 0 and exercise the request guards against a real socket.
+fn bind_server(host: &str, port: u16) -> Result<Arc<Server>, String> {
+    let server_addr = format!("{}:{}", host, port);
+    Server::http(&server_addr).map(Arc::new).map_err(|e| {
+        format!(
+            "cannot listen on {}: {}\n    (--host takes an IP address, e.g. 127.0.0.1; check the port is free)",
+            server_addr, e
+        )
+    })
+}
+
+/// Serve requests on `server` from `workers` threads until it is dropped.
+fn serve(server: Arc<Server>, client: Arc<ZTEClient>, http_client: Client, bind_host: &str, workers: usize) -> Vec<thread::JoinHandle<()>> {
+    (0..workers)
+        .map(|_| {
+            let server = Arc::clone(&server);
+            let client = Arc::clone(&client);
+            let http_client = http_client.clone();
+            let bind_host = bind_host.to_string();
+            thread::spawn(move || {
+                for request in server.incoming_requests() {
+                    handle_http_request(request, &client, &http_client, &bind_host);
                 }
-            }
-        }
-    }
-    default_val
+            })
+        })
+        .collect()
 }
 
-pub fn check_for_updates() -> Result<(String, String, bool), String> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(4))
-        .user_agent("zte-control-updater")
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let resp = client
-        .get("https://api.github.com/repos/miwaniza/zte-k12-rotator/releases/latest")
-        .send()
-        .map_err(|e| format!("Failed to reach GitHub API: {}", e))?;
-
-    let json: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
-    let latest_tag = json
-        .get("tag_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim_start_matches('v')
-        .to_string();
-
-    let has_update = !latest_tag.is_empty() && latest_tag != VERSION;
-    Ok((VERSION.to_string(), latest_tag, has_update))
-}
-
-pub fn run_ui_server(client: Arc<ZTEClient>, port: u16, no_open: bool) {
-    let server_addr = format!("0.0.0.0:{}", port);
-    let server = Server::http(&server_addr).expect("Failed to start HTTP server");
+pub fn run_ui_server(client: Arc<ZTEClient>, host: &str, port: u16, no_open: bool) -> Result<(), String> {
+    let server = bind_server(host, port)?;
 
     println!("============================================================");
     println!("  🚀 ZTE K12 Master Web Controller & PWA v{} Started", VERSION);
-    println!("  👉 Dashboard: http://127.0.0.1:{}", port);
+    println!("  👉 Dashboard: http://{}:{}", host, port);
     println!("  📡 Router:    {}", client.base_url);
     println!("============================================================");
 
+    if !is_loopback_host(host) {
+        eprintln!("  ⚠️  Listening on {} -- NOT loopback. This server proxies an", host);
+        eprintln!("      authenticated modem session; anyone who can reach this port can");
+        eprintln!("      control the modem. Use --host 127.0.0.1 unless you mean it.");
+    }
+
     if !no_open {
-        let url = format!("http://127.0.0.1:{}", port);
+        let url = format!("http://{}:{}", host, port);
         let _ = open::that(url);
     }
 
@@ -434,105 +496,10 @@ pub fn run_ui_server(client: Arc<ZTEClient>, port: u16, no_open: bool) {
         .build()
         .unwrap_or_else(|_| Client::new());
 
-    for mut request in server.incoming_requests() {
-        let url_path = request.url().to_string();
-
-        if url_path.starts_with("/manifest.json") {
-            let response = Response::from_string(EMBEDDED_MANIFEST)
-                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/manifest+json; charset=utf-8"[..]).unwrap())
-                .with_header(Header::from_bytes(&b"Cache-Control"[..], &b"no-cache, no-store, must-revalidate"[..]).unwrap())
-                .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
-            let _ = request.respond(response);
-        } else if url_path.starts_with("/sw.js") {
-            let response = Response::from_string(EMBEDDED_SW_JS)
-                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/javascript; charset=utf-8"[..]).unwrap())
-                .with_header(Header::from_bytes(&b"Service-Worker-Allowed"[..], &b"/"[..]).unwrap())
-                .with_header(Header::from_bytes(&b"Cache-Control"[..], &b"no-cache, no-store, must-revalidate"[..]).unwrap())
-                .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
-            let _ = request.respond(response);
-        } else if url_path.starts_with("/icon.svg") {
-            let response = Response::from_string(EMBEDDED_ICON_SVG)
-                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"image/svg+xml; charset=utf-8"[..]).unwrap())
-                .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
-            let _ = request.respond(response);
-        } else if url_path.starts_with("/api/reconnect") || url_path.starts_with("/api/rotate") {
-            let new_ip = client.rotate_and_reconnect().unwrap_or_else(|_| "reconnected".to_string());
-            let json_res = format!("{{\"status\":\"success\",\"action\":\"rotated\",\"wan_ip\":\"{}\"}}", new_ip);
-            let response = Response::from_string(json_res)
-                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap())
-                .with_header(Header::from_bytes(&b"Cache-Control"[..], &b"no-cache, no-store, must-revalidate"[..]).unwrap())
-                .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
-            let _ = request.respond(response);
-        } else if url_path.starts_with("/api/update/check") {
-            let json_body = match check_for_updates() {
-                Ok((current, latest, has_update)) => {
-                    format!("{{\"current\":\"{}\",\"latest\":\"{}\",\"has_update\":{}}}", current, latest, has_update)
-                }
-                Err(e) => format!("{{\"error\":\"{}\"}}", e),
-            };
-            let response = Response::from_string(json_body)
-                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap())
-                .with_header(Header::from_bytes(&b"Cache-Control"[..], &b"no-cache, no-store, must-revalidate"[..]).unwrap())
-                .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
-            let _ = request.respond(response);
-        } else if url_path.starts_with("/api/geo") {
-            let geo_data = http_client
-                .get("http://ip-api.com/json/?fields=status,message,country,countryCode,region,regionName,city,zip,lat,lon,timezone,isp,org,as,query")
-                .send()
-                .and_then(|r| r.text())
-                .unwrap_or_else(|_| {
-                    http_client
-                        .get("https://ipwho.is/")
-                        .send()
-                        .and_then(|r| r.text())
-                        .unwrap_or_else(|_| "{\"status\":\"fail\"}".to_string())
-                });
-
-            let response = Response::from_string(geo_data)
-                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap())
-                .with_header(Header::from_bytes(&b"Cache-Control"[..], &b"no-cache, no-store, must-revalidate"[..]).unwrap())
-                .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
-            let _ = request.respond(response);
-        } else if url_path.starts_with("/goform/") {
-            let target_url = format!("{}{}", client.base_url, url_path);
-
-            let result_body = if *request.method() == Method::Post {
-                let mut body_bytes = Vec::new();
-                let _ = request.as_reader().read_to_end(&mut body_bytes);
-                client
-                    .client
-                    .post(&target_url)
-                    .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
-                    .header("X-Requested-With", "XMLHttpRequest")
-                    .header("Referer", format!("{}/index.html", client.base_url))
-                    .body(body_bytes)
-                    .send()
-                    .and_then(|r| r.text())
-                    .unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
-            } else {
-                client
-                    .client
-                    .get(&target_url)
-                    .header("X-Requested-With", "XMLHttpRequest")
-                    .header("Referer", format!("{}/index.html", client.base_url))
-                    .send()
-                    .and_then(|r| r.text())
-                    .unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
-            };
-
-            let response = Response::from_string(result_body)
-                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap())
-                .with_header(Header::from_bytes(&b"Cache-Control"[..], &b"no-cache, no-store, must-revalidate"[..]).unwrap())
-                .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
-            let _ = request.respond(response);
-        } else {
-            let response = Response::from_string(EMBEDDED_UI_HTML)
-                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap())
-                .with_header(Header::from_bytes(&b"Cache-Control"[..], &b"no-cache, no-store, must-revalidate"[..]).unwrap())
-                .with_header(Header::from_bytes(&b"Pragma"[..], &b"no-cache"[..]).unwrap());
-            let _ = request.respond(response);
-        }
+    for handle in serve(server, client, http_client, host, NUM_WORKERS) {
+        let _ = handle.join();
     }
+    Ok(())
 }
 
 fn handle_service_command(action: ServiceAction) {
@@ -546,11 +513,11 @@ fn handle_service_command(action: ServiceAction) {
             ServiceAction::Install => {
                 println!("[*] Registering Windows Scheduled Background Task: ZTEK12RotatorService");
                 let status = Command::new("schtasks")
-                    .args(&["/Create", "/TN", "ZTEK12RotatorService", "/TR", &format!("\"{}\" ui --no-open", exe_str), "/SC", "ONLOGON", "/RL", "HIGHEST", "/F"])
+                    .args(["/Create", "/TN", "ZTEK12RotatorService", "/TR", &format!("\"{}\" ui --no-open", exe_str), "/SC", "ONLOGON", "/RL", "HIGHEST", "/F"])
                     .status();
                 if status.map(|s| s.success()).unwrap_or(false) {
                     println!("[+] Successfully installed background service!");
-                    let _ = Command::new("schtasks").args(&["/Run", "/TN", "ZTEK12RotatorService"]).status();
+                    let _ = Command::new("schtasks").args(["/Run", "/TN", "ZTEK12RotatorService"]).status();
                     println!("[+] Service started at http://127.0.0.1:8080");
                 } else {
                     eprintln!("[-] Failed to install service. Try running as Administrator.");
@@ -558,16 +525,16 @@ fn handle_service_command(action: ServiceAction) {
             }
             ServiceAction::Uninstall => {
                 println!("[*] Removing Windows Scheduled Background Task: ZTEK12RotatorService");
-                let _ = Command::new("schtasks").args(&["/End", "/TN", "ZTEK12RotatorService"]).status();
-                let _ = Command::new("schtasks").args(&["/Delete", "/TN", "ZTEK12RotatorService", "/F"]).status();
+                let _ = Command::new("schtasks").args(["/End", "/TN", "ZTEK12RotatorService"]).status();
+                let _ = Command::new("schtasks").args(["/Delete", "/TN", "ZTEK12RotatorService", "/F"]).status();
                 println!("[+] Service uninstalled.");
             }
             ServiceAction::Start => {
-                let _ = Command::new("schtasks").args(&["/Run", "/TN", "ZTEK12RotatorService"]).status();
+                let _ = Command::new("schtasks").args(["/Run", "/TN", "ZTEK12RotatorService"]).status();
                 println!("[+] Background task start requested.");
             }
             ServiceAction::Stop => {
-                let _ = Command::new("schtasks").args(&["/End", "/TN", "ZTEK12RotatorService"]).status();
+                let _ = Command::new("schtasks").args(["/End", "/TN", "ZTEK12RotatorService"]).status();
                 println!("[+] Background task stopped.");
             }
         }
@@ -612,9 +579,9 @@ fn handle_service_command(action: ServiceAction) {
 </dict>
 </plist>"#, exe_str, log_dir, log_dir);
 
-                if let Ok(_) = fs::write(&plist_path, plist_content) {
-                    let _ = Command::new("launchctl").args(&["unload", "-w", &plist_path]).status();
-                    let status = Command::new("launchctl").args(&["load", "-w", &plist_path]).status();
+                if fs::write(&plist_path, plist_content).is_ok() {
+                    let _ = Command::new("launchctl").args(["unload", "-w", &plist_path]).status();
+                    let status = Command::new("launchctl").args(["load", "-w", &plist_path]).status();
                     if status.map(|s| s.success()).unwrap_or(false) {
                         println!("[+] Successfully registered LaunchAgent at: {}", plist_path);
                         println!("[+] Background service active at http://127.0.0.1:8080");
@@ -627,16 +594,16 @@ fn handle_service_command(action: ServiceAction) {
             }
             ServiceAction::Uninstall => {
                 println!("[*] Unloading and removing macOS LaunchAgent...");
-                let _ = Command::new("launchctl").args(&["unload", "-w", &plist_path]).status();
+                let _ = Command::new("launchctl").args(["unload", "-w", &plist_path]).status();
                 let _ = fs::remove_file(&plist_path);
                 println!("[+] Service uninstalled.");
             }
             ServiceAction::Start => {
-                let _ = Command::new("launchctl").args(&["start", "com.zte.rotator"]).status();
+                let _ = Command::new("launchctl").args(["start", "com.zte.rotator"]).status();
                 println!("[+] LaunchAgent started.");
             }
             ServiceAction::Stop => {
-                let _ = Command::new("launchctl").args(&["stop", "com.zte.rotator"]).status();
+                let _ = Command::new("launchctl").args(["stop", "com.zte.rotator"]).status();
                 println!("[+] LaunchAgent stopped.");
             }
         }
@@ -651,9 +618,21 @@ fn handle_service_command(action: ServiceAction) {
     }
 }
 
+
+/// Commands that issue SET requests are useless without a password; say so once,
+/// clearly, instead of letting every call fail with an auth error.
+fn require_password(password: &str) {
+    if password.is_empty() {
+        eprintln!("[-] This command needs the WebUI admin password.");
+        eprintln!("    Pass --password <pw> or set ZTE_PASSWORD in the environment.");
+        std::process::exit(2);
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
-    let client = Arc::new(ZTEClient::new(&cli.host, &cli.password, cli.bind_ip.as_deref()));
+    let password = cli.password.clone().unwrap_or_default();
+    let client = Arc::new(ZTEClient::new(&cli.host, &password, cli.bind_ip.as_deref()));
 
     match cli.command {
         None | Some(Commands::Status) => match client.get_status() {
@@ -700,10 +679,10 @@ fn main() {
             println!("{}", "-".repeat(92));
             loop {
                 if let Ok(st) = client.get_status() {
-                    let ts = chrono_ms() / 1000 % 86400;
-                    let hrs = ts / 3600;
-                    let mins = (ts % 3600) / 60;
-                    let secs = ts % 60;
+                    let total_secs = (chrono_ms() / 1000) % 86400;
+                    let hrs = total_secs / 3600;
+                    let mins = (total_secs % 3600) / 60;
+                    let secs = total_secs % 60;
                     let time_str = format!("{:02}:{:02}:{:02}", hrs, mins, secs);
 
                     let op = get_first_non_empty(&st, &["network_provider", "strShortName"], "N/A");
@@ -720,35 +699,169 @@ fn main() {
             }
         }
 
-        Some(Commands::LockBand { bands }) => match client.lock_bands(&bands) {
-            Ok(res) => println!("[+] Band lock result: {}", res),
-            Err(e) => eprintln!("[-] Error locking band: {}", e),
-        },
-
-        Some(Commands::LockCell { earfcn, pci, reconnect }) => match client.lock_cell(earfcn, pci) {
-            Ok(res) => {
-                println!("[+] Cell lock result: {}", res);
-                if reconnect {
-                    let _ = client.rotate_and_reconnect();
-                }
+        Some(Commands::LockBand { bands }) => {
+            require_password(&password);
+            match client.lock_bands(&bands) {
+                Ok(res) => println!("[+] Band lock result: {}", res),
+                Err(e) => eprintln!("[-] Error locking band: {}", e),
             }
-            Err(e) => eprintln!("[-] Error locking cell: {}", e),
-        },
+        }
 
-        Some(Commands::UnlockCell { reconnect }) => match client.unlock_cell() {
-            Ok(res) => {
-                println!("[+] Unlock result: {}", res);
-                if reconnect {
-                    let _ = client.rotate_and_reconnect();
+        Some(Commands::LockCell { earfcn, pci, reconnect }) => {
+            require_password(&password);
+            match client.lock_cell(earfcn, pci) {
+                Ok(res) => {
+                    println!("[+] Cell lock result: {}", res);
+                    if reconnect {
+                        report_rotation(client.rotate_and_reconnect());
+                    }
                 }
+                Err(e) => eprintln!("[-] Error locking cell: {}", e),
             }
-            Err(e) => eprintln!("[-] Error unlocking cell: {}", e),
-        },
+        }
+
+        Some(Commands::UnlockCell { reconnect }) => {
+            require_password(&password);
+            match client.unlock_cell() {
+                Ok(res) => {
+                    println!("[+] Unlock result: {}", res);
+                    if reconnect {
+                        report_rotation(client.rotate_and_reconnect());
+                    }
+                }
+                Err(e) => eprintln!("[-] Error unlocking cell: {}", e),
+            }
+        }
+
+        Some(Commands::UnlockBands) => {
+            require_password(&password);
+            match client.unlock_bands() {
+                Ok(res) => println!("[+] All bands re-enabled (2G/3G + LTE), locks cleared: {}", res),
+                Err(e) => eprintln!("[-] Error re-enabling bands: {}", e),
+            }
+        }
 
         Some(Commands::Reconnect) | Some(Commands::Rotate) => {
-            match client.rotate_and_reconnect() {
-                Ok(new_ip) => println!("[+] Cellular session rotated! New WAN IP: {}", new_ip),
-                Err(e) => eprintln!("[-] Error during rotation: {}", e),
+            require_password(&password);
+            if !report_rotation(client.rotate_and_reconnect()) {
+                std::process::exit(1);
+            }
+        }
+
+        Some(Commands::SetApn { apn, name, index, auth, user, pass }) => {
+            require_password(&password);
+            let auth = match auth.as_str() {
+                "pap" => zte_control::ApnAuth::Pap { username: user, password: pass },
+                "chap" => zte_control::ApnAuth::Chap { username: user, password: pass },
+                _ => zte_control::ApnAuth::None,
+            };
+            match client.set_apn(&apn, &name, index, auth) {
+                Ok(()) => {
+                    println!("[+] APN set to '{}' (profile '{}', slot {}).", apn, name, index);
+                    println!("    Verify: zte-control get wan_apn,m_profile_name,apn_mode");
+                    println!("    Then:   zte-control connect");
+                }
+                Err(e) => {
+                    eprintln!("[-] {}", e);
+                    eprintln!("    This firmware may use a different APN command; set it in the WebUI instead.");
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        Some(Commands::Connect) => {
+            require_password(&password);
+            match client.connect() {
+                Ok(()) => {
+                    println!("[*] Dial issued; waiting for the bearer…");
+                    let bearer = client.await_bearer(Duration::from_secs(30));
+                    client.note_dial_result(bearer.is_some());
+                    match bearer {
+                        Some(Some(ip)) => println!("[+] Bearer up. WAN IP: {}", ip),
+                        Some(None) => println!("[+] Bearer up (WAN IP not readable)."),
+                        None => {
+                            eprintln!("[-] No bearer after 30s. Check registration with `diagnose`.");
+                            let n = client.consecutive_dial_failures();
+                            if n > 1 {
+                                eprintln!("    {} refusals in a row now. If this keeps up the network is refusing the SIM,", n);
+                                eprintln!("    not the modem failing -- re-running this only adds to the pattern.");
+                            }
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[-] Dial failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        Some(Commands::Disconnect) => {
+            require_password(&password);
+            match client.disconnect() {
+                Ok(()) => println!("[+] Bearer disconnected."),
+                Err(e) => {
+                    eprintln!("[-] {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        Some(Commands::SetDialMode { mode }) => {
+            require_password(&password);
+            let auto = mode == "auto";
+            match client.set_dial_mode(auto) {
+                Ok(()) => println!("[+] Dial mode set to {}. Verify with `zte-control get dial_mode`.", mode),
+                Err(e) => {
+                    eprintln!("[-] {}", e);
+                    eprintln!("    This firmware may use a different goform command; set it in the WebUI instead.");
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        Some(Commands::Get { keys, json, all }) => {
+            // Best-effort: read-only fields still come back without a session.
+            if !password.is_empty() {
+                if let Err(e) = client.ensure_logged_in() {
+                    eprintln!("[!] not authenticated ({}); auth-gated fields will be empty", e);
+                }
+            } else {
+                eprintln!("[!] no password set; auth-gated fields will be empty");
+            }
+            match client.get_cmd(&keys, true) {
+                Ok(map) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&map).unwrap_or_default());
+                    } else {
+                        let mut rows: Vec<(&String, String)> = map
+                            .iter()
+                            .map(|(k, v)| {
+                                let s = v.as_str().map(|s| s.to_string()).unwrap_or_else(|| v.to_string());
+                                (k, s)
+                            })
+                            .collect();
+                        rows.sort_by(|a, b| a.0.cmp(b.0));
+                        let width = rows.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+                        let mut shown = 0;
+                        for (k, v) in &rows {
+                            if v.is_empty() && !all {
+                                continue;
+                            }
+                            shown += 1;
+                            println!("{:<width$}  {}", k, if v.is_empty() { "(empty)" } else { v }, width = width);
+                        }
+                        let empty = rows.len() - shown;
+                        if empty > 0 && !all {
+                            println!("\n({} field(s) empty or unsupported — pass --all to list them)", empty);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[-] {}", e);
+                    std::process::exit(1);
+                }
             }
         }
 
@@ -769,8 +882,370 @@ fn main() {
             handle_service_command(action);
         }
 
-        Some(Commands::Ui { port, no_open }) => {
-            run_ui_server(client, port, no_open);
+        Some(Commands::Ui { host, port, no_open }) => {
+            if let Err(e) = run_ui_server(client, &host, port, no_open) {
+                eprintln!("[-] {}", e);
+                std::process::exit(1);
+            }
         }
+
+        Some(Commands::Diagnose { json }) => {
+            let report = client.run_diagnostics();
+            print_diagnostics(&report, json);
+        }
+
+        Some(Commands::FleetRotate { config, once }) => {
+            let parsed = std::fs::read_to_string(&config)
+                .map_err(|e| format!("cannot read config {}: {}", config, e))
+                .and_then(|s| {
+                    serde_json::from_str::<FleetConfig>(&s)
+                        .map_err(|e| format!("invalid fleet config JSON: {}", e))
+                });
+            match parsed {
+                Ok(fc) => {
+                    if let Err(e) = fleet_rotate(fc, once, stdout_logger()) {
+                        eprintln!("[fleet] error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+}
+
+/// Report a rotation without overstating it. Returns true when the public address
+/// is known to have changed.
+fn report_rotation(result: zte_control::Result<zte_control::RotationOutcome>) -> bool {
+    match result {
+        Ok(outcome) if outcome.verified() => {
+            println!("[+] Cellular session rotated: {}", outcome.summary());
+            true
+        }
+        Ok(outcome) => {
+            println!("[!] Rotation incomplete: {}", outcome.summary());
+            false
+        }
+        Err(e) => {
+            eprintln!("[-] Error during rotation: {}", e);
+            false
+        }
+    }
+}
+
+fn print_diagnostics(rep: &DiagnosticReport, json_output: bool) {
+    if json_output {
+        if let Ok(j) = serde_json::to_string_pretty(rep) {
+            println!("{}", j);
+            return;
+        }
+    }
+
+    println!("============================================================");
+    println!("        🔍 ZTE MODEM OFFLINE DIAGNOSTICS & HEALTH CHECK");
+    println!("============================================================");
+    println!(" Target Host:      {}", rep.host);
+    println!(" Reachable:        {}", if rep.reachable { "✅ Yes" } else { "❌ No (Check USB / RNDIS network adapter)" });
+    println!(" Auth Status:      {}", if rep.authenticated { "✅ Authenticated" } else if rep.login_lock_seconds > 0 { "🔒 Locked Out" } else { "⚠️  Unauthenticated (Read-Only)" });
+    if rep.login_lock_seconds > 0 {
+        println!(" Lockout Left:     ~{} seconds", rep.login_lock_seconds);
+    }
+    if !rep.hardware_version.is_empty() || !rep.firmware_version.is_empty() {
+        println!(" Hardware / FW:    {} | {}", rep.hardware_version, rep.firmware_version);
+    }
+    if !rep.imei.is_empty() {
+        println!(" IMEI / SN:        {} | {}", rep.imei, rep.modem_sn);
+    }
+    if !rep.battery.is_empty() {
+        println!(" Battery Level:    {}%", rep.battery);
+    }
+    if !rep.wifi_devices.is_empty() {
+        println!(" WiFi Clients:     {}", rep.wifi_devices);
+    }
+    println!("------------------------------------------------------------");
+    println!(" 💳 SIM CARD STATUS");
+    println!(" SIM Detected:     {}", if rep.sim_detected { "✅ Yes (SIM Detected)" } else { "❌ Not confirmed (see findings)" });
+    println!(" SIM Raw State:    {}", if rep.sim_state.is_empty() { "Unknown" } else { &rep.sim_state });
+    println!(" PIN Lock:         {}", if rep.pin_status.is_empty() { "None" } else { &rep.pin_status });
+    println!(" PUK Lock:         {}", if rep.puk_status.is_empty() { "None" } else { &rep.puk_status });
+    if !rep.iccid.is_empty() {
+        println!(" ICCID:            {}", rep.iccid);
+    }
+    if !rep.imsi.is_empty() {
+        println!(" IMSI:             {}", rep.imsi);
+    }
+    println!("------------------------------------------------------------");
+    println!(" 📡 CELLULAR RADIO & NETWORK");
+    println!(" Network Status:   {} ({})", if rep.registered { "✅ Registered" } else { "❌ NO SERVICE / Searching" }, if rep.network_type.is_empty() { "N/A" } else { &rep.network_type });
+    println!(" Carrier / PLMN:   {}", if rep.provider.is_empty() { "N/A" } else { &rep.provider });
+    println!(" Roaming:          {}", if rep.roaming { "⚠️  Roaming" } else { "Home Network" });
+    println!(" Active Band:      {} (Channel / EARFCN: {})", if rep.band.is_empty() { "N/A" } else { &rep.band }, if rep.channel.is_empty() { "--" } else { &rep.channel });
+    println!(" Serving Cell:     PCI: {} | Cell ID: {}", if rep.pci.is_empty() { "--" } else { &rep.pci }, if rep.cell_id.is_empty() { "--" } else { &rep.cell_id });
+    println!(" Allowed Bands:    {}", rep.band_lock);
+    println!(" Cell Lock:        {}", rep.cell_lock.as_deref().unwrap_or("None (auto cell selection)"));
+    println!(" Radio Signal:     RSRP: {} dBm | RSSI: {} dBm", if rep.rsrp.is_empty() { "--" } else { &rep.rsrp }, if rep.rssi.is_empty() { "--" } else { &rep.rssi });
+    println!(" Signal Quality:   SINR: {} dB | RSRQ: {} dB", if rep.sinr.is_empty() { "--" } else { &rep.sinr }, if rep.rsrq.is_empty() { "--" } else { &rep.rsrq });
+    println!("------------------------------------------------------------");
+    println!(" 🌐 DATA BEARER & IP");
+    println!(" Data Bearer (PPP):{}", if rep.ppp_status == "ppp_connected" { "✅ Connected" } else { "❌ Disconnected" });
+    println!(" Assigned WAN IP:  {}", if rep.wan_ip.is_empty() { "None" } else { &rep.wan_ip });
+    println!(" APN:              {}", if rep.apn.is_empty() { "None / Default" } else { &rep.apn });
+    if !rep.apn_profile.is_empty() || !rep.apn_mode.is_empty() {
+        println!(" APN Profile:      {} (mode: {})", if rep.apn_profile.is_empty() { "--" } else { &rep.apn_profile }, if rep.apn_mode.is_empty() { "--" } else { &rep.apn_mode });
+    }
+    println!(" Dial Mode:        {}", if rep.dial_mode.is_empty() { "N/A" } else { &rep.dial_mode });
+    println!("============================================================");
+
+    if !rep.findings.is_empty() {
+        println!(" ⚠️  DIAGNOSTIC FINDINGS:");
+        for f in &rep.findings {
+            println!("  [!] {}", f);
+        }
+        println!("------------------------------------------------------------");
+    }
+
+    if !rep.recommendations.is_empty() {
+        println!(" 💡 ACTIONABLE RECOMMENDATIONS:");
+        for (i, r) in rep.recommendations.iter().enumerate() {
+            println!("  {}. {}", i + 1, r);
+        }
+        println!("============================================================");
+    } else if rep.ppp_status == "ppp_connected" {
+        println!("  🎉 All systems operational. Modem is healthy and connected.");
+        println!("============================================================");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_authority_host_splits_port_and_ipv6() {
+        assert_eq!(authority_host("127.0.0.1"), "127.0.0.1");
+        assert_eq!(authority_host("127.0.0.1:8080"), "127.0.0.1");
+        assert_eq!(authority_host("localhost:8080"), "localhost");
+        assert_eq!(authority_host("[::1]:8080"), "::1");
+        assert_eq!(authority_host("[::1]"), "::1");
+    }
+
+    #[test]
+    fn test_is_loopback_host() {
+        assert!(is_loopback_host("127.0.0.1"));
+        assert!(is_loopback_host("127.0.0.53"));
+        assert!(is_loopback_host("::1"));
+        assert!(is_loopback_host("localhost"));
+        assert!(is_loopback_host("LOCALHOST"));
+
+        assert!(!is_loopback_host("192.168.8.1"));
+        assert!(!is_loopback_host("evil.example"));
+        assert!(!is_loopback_host(""));
+    }
+
+    #[test]
+    fn test_origin_allowed_accepts_only_loopback_pages() {
+        assert!(origin_allowed("http://127.0.0.1:8080"));
+        assert!(origin_allowed("http://localhost:8080"));
+        assert!(origin_allowed("http://[::1]:8080"));
+    }
+
+    // ---------------------------------------------------------------------
+    // The request guards, against a real socket.
+    //
+    // These are the checks that stop a page the user happens to be visiting
+    // from driving the modem, and they were previously verified only by hand.
+    // ---------------------------------------------------------------------
+
+    /// A dashboard server on an ephemeral port. `base_url` points at it.
+    struct TestServer {
+        base_url: String,
+        _server: Arc<Server>,
+    }
+
+    fn test_server() -> TestServer {
+        let server = bind_server("127.0.0.1", 0).expect("bind ephemeral port");
+        // `to_ip()` rather than matching on ListenAddr: the enum has a Unix-socket
+        // variant only on unix, so a match arm for it is unreachable on Windows
+        // and required on Linux.
+        let port = server
+            .server_addr()
+            .to_ip()
+            .expect("test server listens on IP")
+            .port();
+        // Points at an address with nothing on it: these tests are about the
+        // guards, which all run before any modem traffic is attempted.
+        let client = Arc::new(ZTEClient::new("http://127.0.0.1:1", "", None));
+        let http_client = Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .expect("http client");
+        serve(Arc::clone(&server), client, http_client, "127.0.0.1", 1);
+        TestServer {
+            base_url: format!("http://127.0.0.1:{}", port),
+            _server: server,
+        }
+    }
+
+    fn agent() -> Client {
+        Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .expect("test agent")
+    }
+
+    #[test]
+    fn test_static_asset_served_to_same_origin() {
+        let s = test_server();
+        let res = agent()
+            .get(format!("{}/manifest.json", s.base_url))
+            .send()
+            .expect("request");
+        assert_eq!(res.status().as_u16(), 200);
+        // No CORS header at all for a same-origin caller -- not a wildcard.
+        assert!(res.headers().get("access-control-allow-origin").is_none());
+    }
+
+    #[test]
+    fn test_hostile_origin_is_refused_not_merely_unadvertised() {
+        let s = test_server();
+        for path in ["/manifest.json", "/goform/goform_get_cmd_process?cmd=imei", "/api/geo"] {
+            let res = agent()
+                .get(format!("{}{}", s.base_url, path))
+                .header("Origin", "https://evil.example")
+                .send()
+                .expect("request");
+            assert_eq!(res.status().as_u16(), 403, "{} should be refused", path);
+            assert!(
+                res.headers().get("access-control-allow-origin").is_none(),
+                "{} must not answer a hostile origin with any CORS header",
+                path
+            );
+        }
+    }
+
+    #[test]
+    fn test_lookalike_origin_is_refused() {
+        let s = test_server();
+        let res = agent()
+            .get(format!("{}/manifest.json", s.base_url))
+            .header("Origin", "http://127.0.0.1.evil.example")
+            .send()
+            .expect("request");
+        assert_eq!(res.status().as_u16(), 403);
+    }
+
+    #[test]
+    fn test_allowed_origin_gets_echoed_back() {
+        let s = test_server();
+        let res = agent()
+            .get(format!("{}/api/geo", s.base_url))
+            .header("Origin", "http://localhost:1234")
+            .send()
+            .expect("request");
+        assert_eq!(
+            res.headers()
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some("http://localhost:1234")
+        );
+    }
+
+    #[test]
+    fn test_rotate_rejects_drive_by_get() {
+        let s = test_server();
+        // The `<img src="...">` attack: a GET must not be able to rotate.
+        let res = agent()
+            .get(format!("{}/api/rotate", s.base_url))
+            .send()
+            .expect("request");
+        assert_eq!(res.status().as_u16(), 405);
+        assert_eq!(
+            res.headers().get("allow").and_then(|v| v.to_str().ok()),
+            Some("POST")
+        );
+    }
+
+    #[test]
+    fn test_mutating_endpoints_require_the_xhr_header() {
+        let s = test_server();
+        let res = agent()
+            .post(format!("{}/api/rotate", s.base_url))
+            .send()
+            .expect("request");
+        assert_eq!(res.status().as_u16(), 403);
+
+        let res = agent()
+            .get(format!("{}/goform/goform_get_cmd_process?cmd=imei", s.base_url))
+            .send()
+            .expect("request");
+        assert_eq!(res.status().as_u16(), 403);
+    }
+
+    #[test]
+    fn test_dns_rebinding_host_is_refused() {
+        let s = test_server();
+        // Arrives on loopback but carries an attacker-controlled Host.
+        let res = agent()
+            .get(format!("{}/manifest.json", s.base_url))
+            .header("Host", "evil.example")
+            .send()
+            .expect("request");
+        assert_eq!(res.status().as_u16(), 403);
+    }
+
+    #[test]
+    fn test_preflight_from_hostile_origin_is_refused() {
+        let s = test_server();
+        let res = agent()
+            .request(
+                reqwest::Method::OPTIONS,
+                format!("{}/goform/goform_set_cmd_process", s.base_url),
+            )
+            .header("Origin", "https://evil.example")
+            .header("Access-Control-Request-Method", "POST")
+            .send()
+            .expect("request");
+        assert_eq!(res.status().as_u16(), 403);
+        assert!(res.headers().get("access-control-allow-methods").is_none());
+    }
+
+    #[test]
+    fn test_preflight_from_allowed_origin_succeeds() {
+        let s = test_server();
+        let res = agent()
+            .request(
+                reqwest::Method::OPTIONS,
+                format!("{}/goform/goform_set_cmd_process", s.base_url),
+            )
+            .header("Origin", "http://127.0.0.1:9999")
+            .header("Access-Control-Request-Method", "POST")
+            .send()
+            .expect("request");
+        assert_eq!(res.status().as_u16(), 204);
+        assert_eq!(
+            res.headers()
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some("http://127.0.0.1:9999")
+        );
+    }
+
+    #[test]
+    fn test_origin_allowed_rejects_hostile_origins() {
+        // The bug this replaces: every one of these previously fell through to
+        // `Access-Control-Allow-Origin: *`, which let any page read the modem
+        // proxy's responses.
+        assert!(!origin_allowed("https://evil.example"));
+        assert!(!origin_allowed("http://evil.example"));
+        // Prefix-matching lookalikes.
+        assert!(!origin_allowed("http://127.0.0.1.evil.example"));
+        assert!(!origin_allowed("http://localhost.evil.example"));
+        // Sandboxed iframes and file:// pages, which an attacker can produce.
+        assert!(!origin_allowed("null"));
+        // The Tauri shell this once allowed no longer exists.
+        assert!(!origin_allowed("tauri://localhost"));
     }
 }
